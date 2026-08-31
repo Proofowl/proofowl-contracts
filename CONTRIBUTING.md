@@ -22,9 +22,13 @@ issue or on your own.
    ```
    cargo fmt --all -- --check
    cargo clippy --all-targets -- -D warnings
+   cargo build --target wasm32v1-none --release   # run before the tests
    cargo test --all
-   cargo build --target wasm32v1-none --release
    ```
+   Build the wasm before `cargo test`: `tests/constructor_auth.rs`
+   deploys the compiled artifact and skips itself if it is missing.
+   `Cargo.lock` is committed — update it in the same PR when you change
+   dependencies.
 6. Open a PR against `main`. Please describe *why*, not just *what* — this
    registry's whole value is being trustworthy, so reviewers read contract
    changes closely.

@@ -83,14 +83,36 @@ stays globally spent forever. Recovering an identity whose wallet key is
 *lost* is deliberately out of scope for the MVP — see `SECURITY.md` for
 why a deferred mechanism is safer than a privileged override.
 
+## Initialization
+
+There is **no `init` function**. Configuration is set by the contract's
+`__constructor`, which the host runs once, atomically, inside the deploy
+operation itself — so there is no separate init call to front-run, and a
+race to "initialize first" would only create a *different* contract
+instance. The constructor also calls `admin.require_auth()`, so the
+deploy transaction must be signed by the admin. See
+[`docs/adr/0003-deploy-time-constructor-init.md`](./docs/adr/0003-deploy-time-constructor-init.md).
+
 ## Storage durability
 
 Soroban archives a persistent entry once its TTL runs out. Every registry
 record here — wallet links, GitHub links, PR-dedup markers, attestation
 histories, and the contract instance — has its TTL extended on every
-write, and anyone can call `bump_wallet_ttl(wallet)` to keep a passport
-warm for free. Policy and constants are in
-[`SECURITY.md`](./SECURITY.md#storage-durability-ttl-policy).
+write. Anyone can call `bump_wallet_ttl(wallet)` to keep a passport warm
+for free; it refreshes the wallet link, the GitHub link, the attestation
+history, **and every `SeenPr` de-duplication marker in that history**, so
+a merged PR can never become re-submittable through TTL expiry. Policy
+and constants are in
+[`SECURITY.md`](./SECURITY.md#5-storage-durability-ttl-policy).
+
+## Known MVP limitation — attestation storage
+
+A wallet's attestations live in one `Vec<Attestation>` under a single
+key. Reads, `bump_wallet_ttl`, and each new `submit_attestation` load or
+rewrite the whole vector, so cost grows with a contributor's history.
+Fine for MVP volumes; production scale needs paginated / indexed storage
+(one entry per attestation + a running score counter). Deliberately
+deferred — see [`SECURITY.md`](./SECURITY.md#7-known-mvp-limitations).
 
 ## Quick start
 
@@ -113,9 +135,9 @@ cargo build --target wasm32v1-none --release
 
 ### Deploy (testnet)
 
-Deploy and initialize in one step so there is no unowned window — `init`
-requires the proposed admin's signature, but atomic deploy+init removes
-the race entirely:
+Configuration is passed as constructor arguments to `stellar contract
+deploy` itself — there is no follow-up `init` call. Sign with the admin
+identity so the constructor's `admin.require_auth()` is satisfied:
 
 ```
 stellar contract deploy \
@@ -123,28 +145,24 @@ stellar contract deploy \
   --source <admin-testnet-identity> \
   --network testnet \
   -- \
-  # (no constructor; run init immediately, from the same identity)
+  --admin <ADMIN_ADDRESS> \
+  --attestor <ATTESTOR_ADDRESS>
 ```
 
-```
-stellar contract invoke --id <CONTRACT_ID> --network testnet \
-  --source <admin-testnet-identity> -- \
-  init --admin <ADMIN_ADDRESS> --attestor <ATTESTOR_ADDRESS>
-```
-
-See [`SECURITY.md`](./SECURITY.md#first-testnet-deployment-checklist) for
-the full first-deployment checklist.
+That single transaction deploys the instance and runs `__constructor`
+atomically. Verify with `get_admin` / `get_attestor`. Full checklist in
+[`SECURITY.md`](./SECURITY.md#6-first-testnet-deployment-checklist).
 
 ## Contract API
 
 | Function | Caller(s) | Description |
 |---|---|---|
-| `init(admin, attestor)` | proposed `admin` (signs) | One-time setup; fails if already initialized |
+| `__constructor(admin, attestor)` | the deployer, signed by `admin` | Runs once at deploy; sets admin + attestor. No separate `init`. |
 | `set_attestor(admin, new_attestor)` | `admin` | Rotate the attestor key |
 | `link_github(wallet, attestor, github_id_hash)` | **both** `wallet` and `attestor` | Two-party wallet ↔ GitHub link |
 | `unlink_github(wallet, attestor, github_id_hash)` | **both** linked `wallet` and `attestor` | Clear a link for recovery / relink |
 | `submit_attestation(attestor, github_id_hash, repo, pr_number, issue_id, complexity, pr_hash)` | `attestor` | Record a verified contribution; returns the credited wallet |
-| `bump_wallet_ttl(wallet)` | anyone | Extend TTL on a wallet's link + history (keep-alive) |
+| `bump_wallet_ttl(wallet)` | anyone | Keep-alive: extends TTL on the wallet link, GitHub link, history, and every `SeenPr` marker in it |
 | `get_attestations(wallet)` | anyone (read) | Full attestation history for a wallet |
 | `get_reputation_score(wallet)` | anyone (read) | Summed score across all attestations |
 | `get_wallet_for_github(github_id_hash)` | anyone (read) | Forward lookup: identity → wallet |
@@ -170,8 +188,8 @@ value the attestor supplies.
 
 | Code | Name | Meaning |
 |---|---|---|
-| 1 | `AlreadyInitialized` | `init` called twice |
-| 2 | `NotInitialized` | called before `init` |
+| 1 | `AlreadyInitialized` | reserved (no `init` entrypoint; kept for numbering stability) |
+| 2 | `NotInitialized` | instance config missing (e.g. archived); practically unreachable |
 | 3 | `Unauthorized` | caller is not the stored admin / attestor |
 | 4 | `WalletAlreadyLinked` | that wallet already has an identity |
 | 5 | `GithubAlreadyLinked` | that identity hash is already claimed |

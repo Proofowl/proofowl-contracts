@@ -1,9 +1,12 @@
 # Rust / Cargo build artifacts
 /target
-Cargo.lock
 
 # Compiled / optimized contracts
 *.wasm
+
+# NOTE: Cargo.lock IS committed — this crate builds a deployed wasm
+# artifact and the lockfile pins the exact dependency set that produced
+# it, so a reviewer can reproduce the on-chain bytecode.
 
 # Local environment & secrets
 .env

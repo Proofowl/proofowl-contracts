@@ -7,33 +7,39 @@ use soroban_sdk::{Env, IntoVal};
 
 const TS: u64 = 1_700_000_000;
 
-/// Fully-authorized environment: `mock_all_auths` on, contract
-/// initialized, ledger clock set. Most tests want this.
+/// Fully-authorized environment: `mock_all_auths` on, contract deployed
+/// (constructor runs at `register`), ledger clock set. Most tests want
+/// this.
 fn setup() -> (Env, ProofOwlRegistryClient<'static>, Address, Address) {
     let env = Env::default();
     env.mock_all_auths();
     env.ledger().set_timestamp(TS);
     env.ledger().set_sequence_number(100);
 
-    let contract_id = env.register(ProofOwlRegistry, ());
-    let client = ProofOwlRegistryClient::new(&env, &contract_id);
-
     let admin = Address::generate(&env);
     let attestor = Address::generate(&env);
-    client.init(&admin, &attestor);
+    let contract_id = env.register(ProofOwlRegistry, (admin.clone(), attestor.clone()));
+    let client = ProofOwlRegistryClient::new(&env, &contract_id);
 
     (env, client, admin, attestor)
 }
 
-/// Bare environment: no auth mocking, so `require_auth` is enforced
-/// against whatever `mock_auths` list a test installs.
-fn bare() -> (Env, ProofOwlRegistryClient<'static>) {
+/// Like `setup`, but with auth *enforced* after deployment so a test can
+/// install a precise `mock_auths` list. `Env::register` always runs the
+/// constructor with auth mocked (documented SDK behaviour), so the
+/// contract is deployed and configured regardless; only calls made
+/// afterwards are subject to the enforced auth.
+fn setup_enforced_auth() -> (Env, ProofOwlRegistryClient<'static>, Address, Address) {
     let env = Env::default();
     env.ledger().set_timestamp(TS);
     env.ledger().set_sequence_number(100);
-    let contract_id = env.register(ProofOwlRegistry, ());
+
+    let admin = Address::generate(&env);
+    let attestor = Address::generate(&env);
+    let contract_id = env.register(ProofOwlRegistry, (admin.clone(), attestor.clone()));
     let client = ProofOwlRegistryClient::new(&env, &contract_id);
-    (env, client)
+
+    (env, client, admin, attestor)
 }
 
 fn hash(env: &Env, byte: u8) -> BytesN<32> {
@@ -45,69 +51,52 @@ fn repo(env: &Env) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// 1. Initialization
+// 1. Initialization (deploy-time constructor, no `init` entrypoint)
+//
+// The on-chain guarantee that a non-deployer cannot capture
+// initialization is exercised end-to-end, against the real wasm and the
+// real deployer auth path, in `tests/constructor_auth.rs`. `Env::register`
+// force-mocks constructor auth, so it cannot reject here; what it *can*
+// show is that the constructor bound the config at deploy time and that
+// it demanded the admin's authorization.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn init_requires_admin_authorization() {
-    let (env, client) = bare();
-    let admin = Address::generate(&env);
-    let attestor = Address::generate(&env);
-
-    // No auth provided at all -> init must fail rather than store config.
-    let res = client.try_init(&admin, &attestor);
-    assert!(res.is_err());
-    assert_eq!(client.try_get_admin(), Ok(Ok(None)));
-
-    // With the proposed admin's signature it succeeds.
-    let invoke = MockAuthInvoke {
-        contract: &client.address,
-        fn_name: "init",
-        args: (admin.clone(), attestor.clone()).into_val(&env),
-        sub_invokes: &[],
-    };
-    env.mock_auths(&[MockAuth {
-        address: &admin,
-        invoke: &invoke,
-    }]);
-    client.init(&admin, &attestor);
+fn constructor_binds_config_at_deploy() {
+    let (_env, client, admin, attestor) = setup();
+    // No init call was made; config is already present from `register`.
     assert_eq!(client.get_admin(), Some(admin));
     assert_eq!(client.get_attestor(), Some(attestor));
 }
 
 #[test]
-fn init_rejects_caller_choosing_an_admin_they_do_not_control() {
-    let (env, client) = bare();
-    let attacker = Address::generate(&env);
-    let victim_admin = Address::generate(&env);
+fn constructor_requires_admin_authorization() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
     let attestor = Address::generate(&env);
 
-    // Attacker can only sign as themselves; they try to install
-    // `victim_admin` (or, equivalently, an address they picked but whose
-    // key they lack) as admin.
-    let invoke = MockAuthInvoke {
-        contract: &client.address,
-        fn_name: "init",
-        args: (victim_admin.clone(), attestor.clone()).into_val(&env),
-        sub_invokes: &[],
-    };
-    env.mock_auths(&[MockAuth {
-        address: &attacker,
-        invoke: &invoke,
-    }]);
+    let _id = env.register(ProofOwlRegistry, (admin.clone(), attestor.clone()));
 
-    let res = client.try_init(&victim_admin, &attestor);
-    assert!(res.is_err());
-    assert_eq!(client.try_get_admin(), Ok(Ok(None)));
+    // The constructor's `admin.require_auth()` is recorded during
+    // registration. On-chain this means the deploy transaction must be
+    // signed by `admin` — a party who is not `admin` (and cannot obtain
+    // that signature) cannot run this setup at all.
+    let auths = env.auths();
+    assert!(
+        auths.iter().any(|(addr, _)| addr == &admin),
+        "constructor must require admin authorization; auths = {auths:?}"
+    );
 }
 
 #[test]
-fn double_init_fails() {
+fn there_is_no_reinitialization_entrypoint() {
+    // Compile-time guarantee, asserted for the reader: the generated
+    // client exposes no `init` / `try_init`. The only setup path is the
+    // constructor, which the host runs exactly once at deploy.
     let (_env, client, admin, attestor) = setup();
-    assert_eq!(
-        client.try_init(&admin, &attestor),
-        Err(Ok(Error::AlreadyInitialized))
-    );
+    assert_eq!(client.get_admin(), Some(admin));
+    assert_eq!(client.get_attestor(), Some(attestor));
 }
 
 // ---------------------------------------------------------------------------
@@ -128,7 +117,7 @@ fn link_github_sets_both_directions() {
 
 #[test]
 fn link_github_requires_wallet_authorization() {
-    let (env, client, _admin, attestor) = setup_bare_initialized();
+    let (env, client, _admin, attestor) = setup_enforced_auth();
     let wallet = Address::generate(&env);
     let gh = hash(&env, 1);
 
@@ -150,7 +139,7 @@ fn link_github_requires_wallet_authorization() {
 
 #[test]
 fn link_github_requires_attestor_authorization() {
-    let (env, client, _admin, attestor) = setup_bare_initialized();
+    let (env, client, _admin, attestor) = setup_enforced_auth();
     let wallet = Address::generate(&env);
     let gh = hash(&env, 1);
 
@@ -242,7 +231,7 @@ fn unlink_github_clears_the_link_and_allows_relink() {
 
 #[test]
 fn unlink_requires_wallet_authorization() {
-    let (env, client, _admin, attestor) = setup_bare_initialized();
+    let (env, client, _admin, attestor) = setup_enforced_auth();
     let wallet = Address::generate(&env);
     let gh = hash(&env, 7);
     mock_pair(&env, &client, "link_github", &wallet, &attestor, &gh);
@@ -264,7 +253,7 @@ fn unlink_requires_wallet_authorization() {
 
 #[test]
 fn unlink_requires_attestor_authorization() {
-    let (env, client, _admin, attestor) = setup_bare_initialized();
+    let (env, client, _admin, attestor) = setup_enforced_auth();
     let wallet = Address::generate(&env);
     let gh = hash(&env, 7);
     mock_pair(&env, &client, "link_github", &wallet, &attestor, &gh);
@@ -500,10 +489,10 @@ fn attesting_unlinked_github_id_fails() {
 
 #[test]
 fn attestation_from_wrong_attestor_fails() {
-    let (env, client, ..) = setup();
+    let (env, client, _admin, attestor) = setup();
     let wallet = Address::generate(&env);
     let gh = hash(&env, 8);
-    client.link_github(&wallet, &_attestor_of(&client), &gh);
+    client.link_github(&wallet, &attestor, &gh);
 
     let impostor = Address::generate(&env);
     assert_eq!(
@@ -522,7 +511,7 @@ fn attestation_from_wrong_attestor_fails() {
 
 #[test]
 fn attestation_requires_attestor_authorization() {
-    let (env, client, _admin, attestor) = setup_bare_initialized();
+    let (env, client, _admin, attestor) = setup_enforced_auth();
     let wallet = Address::generate(&env);
     let gh = hash(&env, 8);
     mock_pair(&env, &client, "link_github", &wallet, &attestor, &gh);
@@ -585,7 +574,7 @@ fn set_attestor_rotates_the_signing_key() {
 
 #[test]
 fn set_attestor_requires_admin_authorization() {
-    let (env, client, admin, _attestor) = setup_bare_initialized();
+    let (env, client, admin, _attestor) = setup_enforced_auth();
     let new_attestor = Address::generate(&env);
 
     // Someone other than admin signs.
@@ -701,24 +690,38 @@ fn attesting_extends_ttl_on_history_and_pr_records() {
 }
 
 #[test]
-fn bump_wallet_ttl_refreshes_cold_records() {
+fn bump_wallet_ttl_refreshes_cold_records_including_every_pr_marker() {
     let (env, client, _admin, attestor) = setup();
     let wallet = Address::generate(&env);
     let gh = hash(&env, 3);
     client.link_github(&wallet, &attestor, &gh);
-    client.submit_attestation(
-        &attestor,
-        &gh,
-        &repo(&env),
-        &1u32,
-        &1u64,
-        &100u32,
-        &hash(&env, 56),
-    );
 
-    // Advance the ledger clock so the entries have decayed a bit.
+    // Three distinct PRs -> three SeenPr markers.
+    let prs = [hash(&env, 56), hash(&env, 57), hash(&env, 58)];
+    for (i, pr) in prs.iter().enumerate() {
+        client.submit_attestation(
+            &attestor,
+            &gh,
+            &repo(&env),
+            &(i as u32),
+            &(i as u64),
+            &100u32,
+            pr,
+        );
+    }
+
+    // Advance the ledger clock so every entry is now below the bump
+    // threshold (but not yet archived).
     env.ledger()
         .set_sequence_number(100 + REGISTRY_TTL_EXTEND_TO - REGISTRY_TTL_THRESHOLD + 10);
+
+    // Sanity: markers really have decayed past the threshold first.
+    env.as_contract(&client.address, || {
+        let p = env.storage().persistent();
+        for pr in &prs {
+            assert!(p.get_ttl(&DataKey::SeenPr(pr.clone())) < REGISTRY_TTL_THRESHOLD);
+        }
+    });
 
     client.bump_wallet_ttl(&wallet);
 
@@ -727,7 +730,33 @@ fn bump_wallet_ttl_refreshes_cold_records() {
         assert!(p.get_ttl(&DataKey::WalletLink(wallet.clone())) >= REGISTRY_TTL_THRESHOLD);
         assert!(p.get_ttl(&DataKey::GithubLink(gh.clone())) >= REGISTRY_TTL_THRESHOLD);
         assert!(p.get_ttl(&DataKey::Attestations(wallet.clone())) >= REGISTRY_TTL_THRESHOLD);
+        // The core of blocker #2: every PR-dedup marker was refreshed,
+        // so an old PR can never become re-submittable.
+        for pr in &prs {
+            assert!(p.get_ttl(&DataKey::SeenPr(pr.clone())) >= REGISTRY_TTL_THRESHOLD);
+        }
     });
+}
+
+#[test]
+fn bump_wallet_ttl_keeps_duplicate_pr_rejection_alive() {
+    let (env, client, _admin, attestor) = setup();
+    let wallet = Address::generate(&env);
+    let gh = hash(&env, 4);
+    client.link_github(&wallet, &attestor, &gh);
+    let pr = hash(&env, 90);
+    client.submit_attestation(&attestor, &gh, &repo(&env), &1u32, &1u64, &150u32, &pr);
+
+    // Time passes; a keep-alive is run instead of letting the marker lapse.
+    env.ledger()
+        .set_sequence_number(100 + REGISTRY_TTL_EXTEND_TO - REGISTRY_TTL_THRESHOLD + 10);
+    client.bump_wallet_ttl(&wallet);
+
+    // The already-spent PR is still rejected.
+    assert_eq!(
+        client.try_submit_attestation(&attestor, &gh, &repo(&env), &1u32, &1u64, &150u32, &pr),
+        Err(Ok(Error::DuplicateAttestation))
+    );
 }
 
 #[test]
@@ -738,29 +767,8 @@ fn bump_wallet_ttl_is_a_noop_for_unlinked_wallet() {
 }
 
 // ---------------------------------------------------------------------------
-// helpers that need an initialized-but-not-fully-mocked env
+// helpers
 // ---------------------------------------------------------------------------
-
-/// Like `setup`, but drops back to enforced auth after `init` so tests
-/// can install precise `mock_auths` lists.
-fn setup_bare_initialized() -> (Env, ProofOwlRegistryClient<'static>, Address, Address) {
-    let (env, client) = bare();
-    let admin = Address::generate(&env);
-    let attestor = Address::generate(&env);
-
-    let invoke = MockAuthInvoke {
-        contract: &client.address,
-        fn_name: "init",
-        args: (admin.clone(), attestor.clone()).into_val(&env),
-        sub_invokes: &[],
-    };
-    env.mock_auths(&[MockAuth {
-        address: &admin,
-        invoke: &invoke,
-    }]);
-    client.init(&admin, &attestor);
-    (env, client, admin, attestor)
-}
 
 /// Install a two-signature mock (`wallet` + `attestor`) for a 3-arg
 /// `(Address, Address, BytesN<32>)` contract function.
@@ -789,8 +797,4 @@ fn mock_pair(
             invoke: &invoke,
         },
     ]);
-}
-
-fn _attestor_of(client: &ProofOwlRegistryClient) -> Address {
-    client.get_attestor().unwrap()
 }

@@ -34,13 +34,35 @@
 //!   wallet cannot claim `hash("torvalds")` on its own — the attestor
 //!   will not co-sign a link the OAuth flow did not back.
 //!
+//! ## Initialization
+//!
+//! There is **no `init` entrypoint**. Configuration is set by
+//! [`ProofOwlRegistry::__constructor`], which the host runs exactly once,
+//! atomically, inside the `CreateContract` operation that deploys the
+//! instance. There is therefore nothing to front-run: a race to
+//! "initialize first" would only ever create a *different* contract
+//! instance. The constructor additionally calls `admin.require_auth()`,
+//! so the deploy transaction must carry the admin's signature.
+//!
 //! ## Storage durability
 //!
 //! Every long-lived record (wallet links, GitHub links, PR-dedup
 //! markers, attestation histories, and the instance itself) has its TTL
 //! extended on every write and on every read-write path that touches it,
-//! plus a permissionless [`ProofOwlRegistry::bump_wallet_ttl`] keep-alive.
-//! See `SECURITY.md` for the exact policy and its rationale.
+//! plus a permissionless [`ProofOwlRegistry::bump_wallet_ttl`] keep-alive
+//! that also refreshes every `SeenPr` marker in a wallet's history. See
+//! `SECURITY.md` for the exact policy and its rationale.
+//!
+//! ## Known MVP scalability limitation
+//!
+//! A wallet's attestations are held in a single `Vec<Attestation>` under
+//! one storage key. Reads (`get_attestations`, `get_reputation_score`)
+//! and `bump_wallet_ttl` load and iterate the whole vector, and each
+//! `submit_attestation` rewrites it. This is fine for the expected
+//! per-contributor volume in the MVP, but production scale needs
+//! paginated / indexed storage (e.g. one entry per attestation keyed by
+//! `(wallet, seq)` plus a running score counter). That refactor is
+//! deliberately deferred — see `SECURITY.md`.
 
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, Address, BytesN, Env,
@@ -102,7 +124,12 @@ pub enum DataKey {
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum Error {
+    /// Reserved. Kept for numbering stability; unreachable now that
+    /// setup is a one-shot constructor with no `init` entrypoint.
     AlreadyInitialized = 1,
+    /// The instance config is missing (e.g. archived). Practically
+    /// unreachable while the instance entry is alive — see the TTL
+    /// policy in `SECURITY.md`.
     NotInitialized = 2,
     Unauthorized = 3,
     WalletAlreadyLinked = 4,
@@ -214,35 +241,26 @@ pub struct ProofOwlRegistry;
 
 #[contractimpl]
 impl ProofOwlRegistry {
-    /// One-time setup. Must be authorized by `admin` — the proposed admin
-    /// signs the initializing transaction, so a bystander cannot seize a
-    /// deployed-but-uninitialized contract with an admin address they do
-    /// not control.
+    /// Deploy-time setup. The host calls this exactly once, atomically,
+    /// as part of the `CreateContract` operation that creates the
+    /// instance — there is no separate `init` call and therefore no
+    /// initialization race to front-run.
+    ///
+    /// `admin.require_auth()` means the deploy transaction must carry the
+    /// admin's signature, binding the configuration to a
+    /// deployer-authorized setup rather than to whoever calls first.
     ///
     /// `attestor` is the key allowed to submit attestations and to
     /// co-sign identity links; rotate it later with [`Self::set_attestor`]
     /// without redeploying.
-    ///
-    /// For maximum safety, deploy and `init` in the same transaction (or
-    /// the same script run) so there is no window at all — see
-    /// `SECURITY.md`.
-    pub fn init(env: Env, admin: Address, attestor: Address) -> Result<(), Error> {
-        if env.storage().instance().has(&DataKey::Admin) {
-            return Err(Error::AlreadyInitialized);
-        }
+    pub fn __constructor(env: Env, admin: Address, attestor: Address) {
         admin.require_auth();
 
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Attestor, &attestor);
         extend_instance(&env);
 
-        Initialized {
-            admin: admin.clone(),
-            attestor: attestor.clone(),
-        }
-        .publish(&env);
-
-        Ok(())
+        Initialized { admin, attestor }.publish(&env);
     }
 
     /// Rotate the attestor key. Admin-only. The intended path to
@@ -451,21 +469,40 @@ impl ProofOwlRegistry {
         Ok(wallet)
     }
 
-    /// Permissionless keep-alive. Extends the TTL of a wallet's link, the
-    /// GitHub link it points at, and its attestation history. Anyone can
-    /// call it (a frontend "keep my passport alive" button, a cron job);
-    /// it only pushes out archival and never changes data. No-op for an
-    /// unlinked wallet.
+    /// Permissionless keep-alive. Extends the TTL of every long-lived
+    /// record tied to a wallet:
+    ///
+    /// * the wallet link and the GitHub link it points at,
+    /// * the attestation-history vector,
+    /// * **every `SeenPr` de-duplication marker** referenced by that
+    ///   history — so a merged PR can never become re-submittable just
+    ///   because its marker was allowed to expire.
+    ///
+    /// Anyone can call it (a frontend "keep my passport alive" button, a
+    /// cron job). It only pushes out archival and never changes data.
+    /// No-op for an unlinked wallet with no history.
+    ///
+    /// Cost scales with the number of attestations for the wallet — see
+    /// the scalability note in the module docs.
     pub fn bump_wallet_ttl(env: Env, wallet: Address) {
         let wallet_key = DataKey::WalletLink(wallet.clone());
         if let Some(github_id_hash) = env.storage().persistent().get::<_, BytesN<32>>(&wallet_key) {
             extend_persistent(&env, &wallet_key);
             extend_persistent(&env, &DataKey::GithubLink(github_id_hash));
         }
+
         let attestations_key = DataKey::Attestations(wallet);
-        if env.storage().persistent().has(&attestations_key) {
+        if let Some(list) = env
+            .storage()
+            .persistent()
+            .get::<_, Vec<Attestation>>(&attestations_key)
+        {
             extend_persistent(&env, &attestations_key);
+            for a in list.iter() {
+                extend_persistent(&env, &DataKey::SeenPr(a.pr_hash));
+            }
         }
+
         extend_instance(&env);
     }
 

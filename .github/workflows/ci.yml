@@ -28,8 +28,11 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: Test
-        run: cargo test --all
-
+      # Build the wasm BEFORE the tests: tests/constructor_auth.rs deploys
+      # the compiled artifact through the real deployer/auth path and
+      # skips itself if the wasm is absent.
       - name: Build wasm (release)
         run: cargo build --target wasm32v1-none --release
+
+      - name: Test
+        run: cargo test --all

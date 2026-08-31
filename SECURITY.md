@@ -56,24 +56,42 @@ Because a link needs the attestor co-signature, a wallet cannot claim
 
 ### 1.4 Admin powers
 
-The admin can do exactly two things: `init` once, and `set_attestor`.
-There is **no** admin function that can create, move, or delete a
-wallet ↔ GitHub link, edit an attestation, or change a score. This is
-intentional (see §4).
+The admin is fixed at deploy time (constructor) and can do exactly one
+thing afterwards: `set_attestor`. There is **no** admin function that can
+create, move, or delete a wallet ↔ GitHub link, edit an attestation, or
+change a score. This is intentional (see §4).
 
 ## 2. Initialization
 
-`init` requires `admin.require_auth()` before it writes anything, so a
-bystander cannot seize a deployed-but-uninitialized contract with an
-admin address they do not control — the worst they can do is install an
-admin address they *do* control, which is no better for them than
-deploying their own copy of the contract.
+There is **no `init` entrypoint.** Configuration is written by
+`__constructor(admin, attestor)`, which the host runs exactly once,
+inside the `CreateContract` host operation that deploys the instance.
+Deployment and initialization are the *same* operation in the *same*
+transaction — not a script that happens to run two commands in a row.
 
-**Deploy and `init` in the same transaction or script run.** That closes
-the window between deployment and initialization entirely. The contract
-keeps a plain `init` (rather than a constructor) to match the documented
-Stellar CLI deploy flow; the atomic-deploy guidance is the mitigation for
-the residual race.
+Why this closes the takeover hole a hardened `init` left open:
+
+- With a separate `init`, a deployed-but-uninitialized instance is a
+  shared resource. `admin.require_auth()` stops an attacker installing an
+  admin address they don't hold, but it does not stop them calling `init`
+  *first* with an address they *do* hold and permanently capturing that
+  specific instance (e.g. one a deploy script created but had not yet
+  initialized).
+- With a constructor there is no uninitialized window and no separate
+  call: the instance does not exist until the transaction that also
+  configures it commits. A front-runner who deploys their own copy just
+  gets a *different* contract id — they cannot touch yours.
+
+The constructor additionally calls `admin.require_auth()`, so the deploy
+transaction must carry the admin's signature: configuration is bound to a
+deployer-authorized setup, and a mistaken admin address (one whose key
+didn't sign) fails the deploy outright.
+
+This is verified end-to-end against the compiled wasm and the real
+deployer auth path in `tests/constructor_auth.rs`
+(`initialization_is_bound_to_an_authorized_deployment`): an unauthorized
+`deploy_v2` fails, an authorized one binds `admin` / `attestor` atomically.
+See `docs/adr/0003-deploy-time-constructor-init.md`.
 
 ## 3. Scoring integrity
 
@@ -129,10 +147,28 @@ reaches zero; reading an archived entry fails until someone restores it.
 Every record in this registry is meant to live indefinitely.
 
 **Policy:** on every mutating call, the contract extends the TTL of every
-persistent entry it touches **and** the instance entry. A permissionless
-`bump_wallet_ttl(wallet)` lets a frontend or cron job refresh a wallet's
-link, the GitHub link it points at, and its attestation history without
-changing any data.
+persistent entry it touches **and** the instance entry. In particular
+`submit_attestation` extends the new `SeenPr` marker, the history vector,
+both link records, and the instance.
+
+**Permissionless keep-alive:** `bump_wallet_ttl(wallet)` lets a frontend
+or cron job refresh, without changing any data:
+
+- `WalletLink(wallet)` and the `GithubLink` it points at;
+- `Attestations(wallet)`;
+- **`SeenPr(pr_hash)` for every attestation in that history** — it loads
+  the history vector and extends each PR-dedup marker.
+
+That last point is the fix for a subtle hole: `SeenPr` markers are what
+make duplicate-PR rejection global and permanent, and an earlier version
+of `bump_wallet_ttl` refreshed the history vector but not the markers it
+referenced. If a marker had been allowed to archive, an old merged PR
+could have been re-submitted. Now a single keep-alive covers them.
+(`tests/…bump_wallet_ttl_refreshes_cold_records_including_every_pr_marker`
+and `…keeps_duplicate_pr_rejection_alive`.)
+
+The cost of `bump_wallet_ttl` grows with the number of attestations for
+the wallet — see §7.
 
 **Constants** (`src/lib.rs`), at the ~5s mainnet ledger cadence
 (1 day ≈ 17 280 ledgers):
@@ -150,28 +186,55 @@ once every ~90 days never come close to archival; genuinely cold records
 via `bump_wallet_ttl` before the 120-day horizon, or restored with
 `RestoreFootprint` afterwards.
 
-Entries covered: `WalletLink`, `GithubLink`, `SeenPr`, `Attestations`,
-and the instance (`Admin` / `Attestor`).
+**Entries covered:** `WalletLink`, `GithubLink`, `SeenPr`,
+`Attestations`, and the instance (`Admin` / `Attestor`) — every
+persistent record the contract writes. No record is left on the default
+TTL.
 
 ## 6. First testnet deployment checklist
 
-1. `cargo test --all` and `cargo build --target wasm32v1-none --release`
-   both green on the commit you intend to ship.
-2. Optionally `stellar contract optimize` the wasm.
-3. Create/fund two **testnet** identities: `admin` and `attestor`
-   (distinct keys). Never reuse a mainnet key.
-4. `stellar contract deploy` the wasm from the `admin` identity; capture
-   the contract id.
-5. **Immediately**, from the same `admin` identity and ideally batched
-   with step 4:
-   `stellar contract invoke --id <ID> -- init --admin <ADMIN> --attestor <ATTESTOR>`.
-6. Verify: `get_admin` and `get_attestor` return the expected addresses;
-   a second `init` fails with `AlreadyInitialized`.
-7. Smoke-test one full path on testnet: `link_github` (co-signed by a
+1. `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D
+   warnings`, `cargo test --all`, and `cargo build --target
+   wasm32v1-none --release` all green on the commit you intend to ship.
+   Commit `Cargo.lock` (it is tracked) so the wasm is reproducible.
+2. (Optional) `stellar contract optimize --wasm
+   target/wasm32v1-none/release/proofowl_contracts.wasm`.
+3. Create + fund two **distinct testnet** identities: `admin` and
+   `attestor`. Never reuse a mainnet key.
+4. Deploy **and initialize in one transaction** by passing the
+   constructor args to `deploy`, signed by `admin`:
+   ```
+   stellar contract deploy --wasm <wasm> --source <admin> --network testnet \
+     -- --admin <ADMIN_ADDR> --attestor <ATTESTOR_ADDR>
+   ```
+   Capture the printed contract id. There is no second `init` step.
+5. Verify: `get_admin` and `get_attestor` return the expected addresses.
+   (There is no `init` to call twice; re-running the constructor is not
+   possible on-chain.)
+6. Smoke-test one full path on testnet: `link_github` (co-signed by a
    throwaway wallet + attestor) → `submit_attestation` → check
    `get_attestations` / `get_reputation_score` → `unlink_github`.
-8. Record the contract id in `README.md` under *Deployed contracts* and
+7. Record the contract id in `README.md` under *Deployed contracts* and
    tag the release.
-9. Hand the `attestor` address to the backend team; keep the `admin` key
+8. Hand the `attestor` address to the backend team; keep the `admin` key
    offline / in a hardware signer. Plan the `set_attestor` rotation to a
    multisig before mainnet.
+
+## 7. Known MVP limitations
+
+- **Attestation storage does not scale.** Each wallet's attestations are
+  a single `Vec<Attestation>` under `Attestations(wallet)`.
+  `get_attestations`, `get_reputation_score`, and `bump_wallet_ttl` load
+  and iterate the whole vector; every `submit_attestation` deserialises,
+  appends, and re-serialises it. This is acceptable for the tens-of-
+  entries-per-contributor volume expected in the MVP, but a
+  production-scale design needs paginated / indexed storage — e.g. one
+  persistent entry per attestation keyed by `(wallet, seq)`, a
+  `count`, and a running `score` counter so reads and keep-alives are
+  O(1) / O(page). Deferred deliberately: it is a storage-layout change
+  with a migration, not a security fix, and doing it now would enlarge
+  the review surface of this correction pass.
+- **Lost-wallet-key recovery is deferred** (§4.2).
+- **Cross-wallet history migration is deferred** (§4.2).
+- **Single trusted attestor** (§1.2) — rotation to a multisig/threshold
+  scheme via `set_attestor` is expected before mainnet.
