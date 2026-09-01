@@ -81,3 +81,86 @@ jobs:
       # Secondary scan. Same documented exception as deny.toml.
       - name: cargo-audit
         run: cargo audit --ignore RUSTSEC-2024-0436
+
+  # ---- TypeScript integration SDK (sdk/typescript/) -------------------
+  # Independent of the Rust gates above. Node-only, fast: install from the
+  # committed lockfile, then format / lint / type-check / unit-test.
+  sdk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/typescript
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
+
+      - name: Install deps (locked)
+        run: npm ci --no-audit --no-fund
+
+      - name: Format check
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+  # ---- Generated-binding drift check --------------------------------
+  # Rebuilds the WASM, regenerates the TypeScript bindings with the same
+  # pinned Stellar CLI, and fails if src/generated/ differs from what is
+  # committed. Heavier (needs Rust + the CLI) so it is its own job.
+  sdk-bindings-drift:
+    runs-on: ubuntu-latest
+    env:
+      STELLAR_CLI_VERSION: "28.0.0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.84
+        with:
+          targets: wasm32v1-none
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Cache Stellar CLI
+        id: cache-stellar
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/bin/stellar
+          key: stellar-cli-${{ runner.os }}-${{ env.STELLAR_CLI_VERSION }}
+
+      - name: Install Stellar CLI (pinned, prebuilt)
+        if: steps.cache-stellar.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          url="https://github.com/stellar/stellar-cli/releases/download/v${STELLAR_CLI_VERSION}/stellar-cli-${STELLAR_CLI_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL "$url" | tar -xz -C "$HOME/.local/bin" stellar
+          chmod +x "$HOME/.local/bin/stellar"
+
+      - name: Add Stellar CLI to PATH
+        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Build contract WASM
+        run: cargo build --target wasm32v1-none --release
+
+      - name: Regenerate bindings
+        run: npm run generate
+        working-directory: sdk/typescript
+
+      - name: Fail on drift
+        run: |
+          git diff --exit-code -- sdk/typescript/src/generated \
+            || { echo "::error::generated bindings are stale — run 'make sdk-generate' and commit"; exit 1; }
