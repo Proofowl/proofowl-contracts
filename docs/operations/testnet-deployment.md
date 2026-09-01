@@ -125,10 +125,15 @@ scripts/deploy_testnet.sh
 #     --source "$PROOFOWL_ADMIN_IDENTITY" \
 #     --rpc-url <verified testnet RPC> \
 #     --network-passphrase "Test SDF Network ; September 2015" \
+#     --optimize=false \
 #     -- \
 #     --admin "$PROOFOWL_ADMIN_ADDRESS" \
 #     --attestor "$PROOFOWL_ATTESTOR_ADDRESS"
 ```
+
+`--optimize=false` is deliberate: the CLI optimizes the WASM by default,
+which would deploy different bytes than the sha256 you recorded. We
+deploy the exact artifact.
 
 The constructor runs inside this transaction. There is no second `init`
 step. The script prints the new contract ID; record it as

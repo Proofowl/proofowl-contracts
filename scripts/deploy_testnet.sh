@@ -55,12 +55,16 @@ info "            constructor also calls admin.require_auth()."
 confirm $'\nProceed with deployment?' deploy
 
 step "stellar contract deploy"
+# --optimize=false: deploy the EXACT bytes we built and hashed. The CLI
+# optimizes by default, which would put different bytes on-chain than the
+# sha256 recorded in the evidence log.
 _contract_id="$(
   stellar contract deploy \
     --wasm "${PROOFOWL_WASM_PATH}" \
     --source "${PROOFOWL_ADMIN_IDENTITY}" \
     --rpc-url "${PROOFOWL_VERIFIED_RPC}" \
     --network-passphrase "${PROOFOWL_VERIFIED_PASSPHRASE}" \
+    --optimize=false \
     -- \
     --admin "${PROOFOWL_ADMIN_ADDRESS}" \
     --attestor "${PROOFOWL_ATTESTOR_ADDRESS}"
