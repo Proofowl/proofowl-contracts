@@ -126,12 +126,20 @@ deferred — see [`SECURITY.md`](./SECURITY.md#7-known-mvp-limitations).
 
 ### Build and test
 
+`make check` runs the complete local quality gate (the same steps CI
+runs):
+
 ```
-cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
-cargo test --all
-cargo build --target wasm32v1-none --release
+make check
+# = cargo fmt --all -- --check
+#   cargo clippy --all-targets -- -D warnings
+#   cargo build --target wasm32v1-none --release
+#   cargo test --all
 ```
+
+`make help` lists every target. Supply-chain checks
+(`make deny` / `make audit`) need network access and are a separate CI
+job — see [Operations & release](#operations--release).
 
 ### Deploy (testnet)
 
@@ -207,12 +215,35 @@ value the attestor supplies.
 ## Repositories
 
 - [`proofowl-contracts`](https://github.com/proofowl/proofowl-contracts) — this repo
-- [`proofowl-backend`](https://github.com/proofowl/proofowl-backend) — GitHub verification, attestation submission, REST API
-- [`proofowl-frontend`](https://github.com/proofowl/proofowl-frontend) — passport pages, leaderboard, wallet linking UI
+- [`proofowl-backend`](https://github.com/proofowl/proofowl-backend) — GitHub verification, attestation submission, REST API *(planned; does not exist yet)*
+- [`proofowl-frontend`](https://github.com/proofowl/proofowl-frontend) — passport pages, leaderboard, wallet linking UI *(planned; does not exist yet)*
+
+See [`docs/architecture.md`](./docs/architecture.md) for how the pieces
+fit together and which ones exist today.
+
+## Operations & release
+
+| Topic | Document |
+|---|---|
+| Local quality gate | `make check` — see `make help` |
+| What "done" means before a tag or deploy | [`docs/RELEASE_CHECKLIST.md`](./docs/RELEASE_CHECKLIST.md) |
+| Versioning & what is a breaking change on-chain | [`docs/RELEASE_POLICY.md`](./docs/RELEASE_POLICY.md) |
+| Change history | [`CHANGELOG.md`](./CHANGELOG.md) |
+| Go/no-go status by area | [`PRODUCTION_READINESS.md`](./PRODUCTION_READINESS.md) |
+| Deploying to testnet (guide) | [`docs/operations/testnet-deployment.md`](./docs/operations/testnet-deployment.md) |
+| Testnet helper scripts | [`scripts/`](./scripts) · config template [`.env.example`](./.env.example) |
+| Maintainer routine tasks | [`docs/MAINTAINERS.md`](./docs/MAINTAINERS.md) |
+| Trust model & vulnerability reporting | [`SECURITY.md`](./SECURITY.md) |
+| Architecture decisions | [`docs/adr/`](./docs/adr) |
+
+Nothing has been deployed, tagged, released, or audited. The manual
+[`testnet-release`](./.github/workflows/testnet-release.yml) workflow
+never deploys by default.
 
 ## Contributing
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md). Please open an issue before large changes.
+See [CONTRIBUTING.md](./CONTRIBUTING.md) and run `make check` before you
+open a PR. Please open an issue before large changes.
 
 ## License
 

@@ -18,17 +18,18 @@ issue or on your own.
    changes who can call what, or the trust model, must be reflected in
    `SECURITY.md` and, if it's a real decision, a new ADR under
    `docs/adr/`.
-5. Before opening a PR, all four must pass locally (CI enforces them):
+5. Before opening a PR, run the local quality gate — CI enforces the
+   same steps:
    ```
-   cargo fmt --all -- --check
-   cargo clippy --all-targets -- -D warnings
-   cargo build --target wasm32v1-none --release   # run before the tests
-   cargo test --all
+   make check
    ```
-   Build the wasm before `cargo test`: `tests/constructor_auth.rs`
-   deploys the compiled artifact and skips itself if it is missing.
-   `Cargo.lock` is committed — update it in the same PR when you change
-   dependencies.
+   which is `cargo fmt --all -- --check`, `cargo clippy --all-targets --
+   -D warnings`, `cargo build --target wasm32v1-none --release` (before
+   the tests — `tests/constructor_auth.rs` loads the compiled artifact
+   and skips itself if it is missing), then `cargo test --all`.
+   `make help` lists every target. `Cargo.lock` is committed — update it
+   in the same PR when you change dependencies, and the `supply-chain`
+   CI job (`cargo deny` / `cargo audit`) must stay green.
 6. Open a PR against `main`. Please describe *why*, not just *what* — this
    registry's whole value is being trustworthy, so reviewers read contract
    changes closely.
