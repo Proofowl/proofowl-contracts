@@ -1,0 +1,13 @@
+{
+  // Compiles everything (including *.test.ts) to a throwaway dir so the
+  // built-in `node --test` runner can execute plain .js with normal
+  // NodeNext resolution — no experimental TS flags in CI.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "test-build",
+    "declaration": false,
+    "declarationMap": false
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules", "test-build"]
+}

@@ -1,0 +1,5 @@
+dist/
+test-build/
+node_modules/
+src/generated/
+package-lock.json

@@ -93,3 +93,36 @@ audit: ## cargo-audit: known-vulnerability scan against Cargo.lock
 
 .PHONY: supply-chain
 supply-chain: deny audit ## Run every supply-chain check (needs network + tools)
+
+# --- TypeScript integration SDK (sdk/typescript/) ----------------------
+# Separate from `make check` (which stays Rust-only). These need Node
+# (>= 22.6) and, for `sdk-generate` / `integration-check`, the stellar
+# CLI. See sdk/typescript/README.md.
+
+SDK_DIR ?= sdk/typescript
+
+.PHONY: sdk-install
+sdk-install: ## Install the TypeScript SDK deps from its committed lockfile
+	cd $(SDK_DIR) && npm ci
+
+.PHONY: sdk-generate
+sdk-generate: ## Regenerate the contract bindings from the WASM (needs stellar CLI)
+	cd $(SDK_DIR) && npm run generate
+
+.PHONY: sdk-test
+sdk-test: ## Format-check, lint, type-check, and unit-test the TypeScript SDK
+	cd $(SDK_DIR) && npm run check
+
+.PHONY: sdk-drift-check
+sdk-drift-check: sdk-generate ## Fail if the generated bindings are stale vs a fresh regeneration
+	@git diff --exit-code -- $(SDK_DIR)/src/generated \
+		|| { echo "generated bindings are stale — run 'make sdk-generate' and commit"; exit 1; }
+
+.PHONY: integration-check
+integration-check: sdk-test sdk-drift-check ## Full TypeScript SDK gate (unit tests + binding drift)
+	@echo
+	@echo "OK — SDK format, lint, types, unit tests, and binding drift all clean."
+
+.PHONY: sdk-integration-testnet
+sdk-integration-testnet: ## Read-only testnet check (get_admin/get_attestor); opt-in, never mutates
+	cd $(SDK_DIR) && npm run test:integration

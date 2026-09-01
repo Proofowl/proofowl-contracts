@@ -1,0 +1,27 @@
+{
+  // `strict` + a few extra safety flags for the handwritten code. Some
+  // options (verbatimModuleSyntax, noImplicitOverride) are intentionally
+  // NOT set: the generated bindings in src/generated/ are verbatim CLI
+  // output and must typecheck without post-processing so the drift check
+  // stays meaningful. DOM lib is included only because the generated
+  // code references `window` behind a `typeof` guard.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2023", "DOM"],
+    "types": ["node"],
+    "outDir": "dist",
+    "rootDir": "src",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules"]
+}
