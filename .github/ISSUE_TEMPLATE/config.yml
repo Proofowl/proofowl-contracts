@@ -1,0 +1,13 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability (private)
+    url: https://github.com/Proofowl/proofowl-contracts/security/advisories/new
+    about: >-
+      Do NOT open a public issue for a security problem. Use GitHub's
+      private vulnerability reporting, or the contact in SECURITY.md.
+      See SECURITY.md for what is in scope and how disclosure is handled.
+  - name: Question or discussion
+    url: https://github.com/Proofowl/proofowl-contracts/blob/main/CONTRIBUTING.md
+    about: >-
+      For usage questions and design discussion, read CONTRIBUTING.md
+      first and open a discussion rather than a bug report.

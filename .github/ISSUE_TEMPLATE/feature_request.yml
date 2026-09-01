@@ -1,0 +1,52 @@
+name: Feature request
+description: Propose a change to the contract, tooling, or docs.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        This contract keeps a deliberately narrow trust surface. Changes
+        that widen what the admin or attestor key can do, or that alter
+        who can call what, get close scrutiny — describe that impact
+        explicitly below.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you unable to do today? Who is affected?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: The behaviour you want. If it touches the contract, sketch the function signature / storage.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+  - type: dropdown
+    id: trust-impact
+    attributes:
+      label: Trust-model impact
+      description: See SECURITY.md.
+      options:
+        - "None — no change to auth, storage layout, or scoring"
+        - "Additive — new read path or optional maintenance call only"
+        - "Changes who must authorize a call"
+        - "Changes stored types / storage keys"
+        - "Changes scoring or accepted complexity values"
+        - "Not sure"
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope / non-goals
+      description: What this explicitly should not include.
+    validations:
+      required: false

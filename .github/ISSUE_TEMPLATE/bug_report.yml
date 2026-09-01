@@ -1,0 +1,56 @@
+name: Bug report
+description: Something in the contract, tests, build, or scripts behaves incorrectly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        **Not for security issues.** If this is a vulnerability, stop and
+        follow the private process in SECURITY.md instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The actual behaviour, with exact error output if any.
+      placeholder: "`cargo test --all` fails on ... with ..."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: A minimal, deterministic sequence. Include the exact commands.
+      placeholder: |
+        1. `make build`
+        2. `cargo test --all`
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Commit / version
+      description: Output of `git rev-parse --short HEAD`, or the crate version.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, `rustc --version`, `cargo --version`, and (if relevant) `stellar --version`.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste text, not screenshots. Redact anything sensitive.
+      render: shell
+    validations:
+      required: false

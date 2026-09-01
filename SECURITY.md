@@ -4,6 +4,35 @@ This document is the single place that spells out the trust model, the
 things the contract deliberately does **not** do, the storage-lifetime
 policy, and the known MVP limitations. Read it with `src/lib.rs` open.
 
+## Reporting a vulnerability
+
+**Do not open a public issue or pull request for a security problem.**
+
+Report it privately, one of two ways:
+
+1. GitHub **private vulnerability reporting** — this repository's
+   *Security* tab → *Report a vulnerability*.
+2. Email the security contact:
+   `SECURITY-CONTACT-PLACEHOLDER` — a maintainer must replace this with a
+   monitored address before the repository is made widely public.
+
+What to expect, stated honestly for the current phase:
+
+- There is **no bug bounty** and **no committed response-time SLA**.
+- Reports are still handled seriously and privately. A maintainer will
+  acknowledge, assess scope against the trust model below, fix on a
+  private branch with a regression test, and agree disclosure timing
+  with the reporter.
+- In scope: the contract in `src/`, the deployment/verification scripts
+  in `scripts/`, and the CI/release workflows. Out of scope: the
+  not-yet-existing backend, indexer, and frontend repositories, and any
+  deployed instance (none exists yet).
+
+The trust *assumptions* the contract makes on purpose (single trusted
+attestor, off-chain GitHub verification, immutability, deferred
+recovery) are documented below and in `docs/adr/` — those are design
+decisions, not vulnerabilities.
+
 ## 1. Trust boundaries
 
 ### 1.1 The contract cannot verify GitHub
