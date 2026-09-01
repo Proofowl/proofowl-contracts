@@ -12,6 +12,6 @@ authorization-entry material appears here.**
 None of this is an audit, a mainnet deployment, or a mainnet-readiness
 claim. Testnet accounts are disposable and funded by friendbot.
 
-| Record | Date (UTC) | Commit | Contract ID |
+| Record | Date (UTC) | Commit (src) | Contract ID |
 |---|---|---|---|
-| [`phase2-alpha.md`](./phase2-alpha.md) | see file | `d030908` | see file |
+| [`phase2-alpha.md`](./phase2-alpha.md) | 2026-09-01 | `d030908` | `CCJ7DVU2XYVFNZMHN4VPCYSPJ7HW4RPI544XG5TG42ZX7TDSUIL3SKP6` |
