@@ -1,0 +1,24 @@
+# CODEOWNERS — review routing for pull requests.
+#
+# https://docs.github.com/en/repositories/managing-your-repos-settings-and-features/customizing-your-repository/about-code-owners
+#
+# ─────────────────────────────────────────────────────────────────────
+#  ACTION REQUIRED (repository owner):
+#  Replace <OWNER> below with the real GitHub team or user handle, then
+#  uncomment the rules. No real handle is committed here on purpose.
+#
+#  Example once you have a team:
+#      *                      @<OWNER>/maintainers
+#      /src/                   @<OWNER>/contract-reviewers
+#      /docs/adr/              @<OWNER>/contract-reviewers
+#      /.github/               @<OWNER>/maintainers
+#      /scripts/               @<OWNER>/maintainers
+#      /deny.toml              @<OWNER>/maintainers
+#      /Cargo.toml /Cargo.lock @<OWNER>/maintainers
+#
+#  Until these are enabled, GitHub enforces no code-owner review. Pair
+#  this file with a branch-protection rule requiring review + the CI
+#  checks. See docs/MAINTAINERS.md.
+# ─────────────────────────────────────────────────────────────────────
+
+# * @OWNER-PLACEHOLDER
