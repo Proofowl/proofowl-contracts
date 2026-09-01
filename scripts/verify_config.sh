@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 #
 # Read the deployed contract's stored admin and attestor and compare them
-# to the addresses you expect. Read-only: this only simulates/reads, it
-# submits no state. Exits non-zero on any mismatch.
+# to the addresses you expect. Read-only (simulation, no submission).
+# Exits non-zero on any mismatch.
+#
+# Guardrails: same testnet verification as the deploy script — the RPC is
+# queried with getNetwork and must report the Stellar testnet passphrase.
 #
 # Required environment (see .env.example):
 #   STELLAR_NETWORK=testnet
@@ -12,7 +15,7 @@
 # Optional:
 #   PROOFOWL_VERIFY_IDENTITY    keystore alias used as the read source
 #                               (falls back to PROOFOWL_ADMIN_IDENTITY)
-#   PROOFOWL_RPC_URL            override RPC
+#   PROOFOWL_RPC_URL            RPC override (default: public testnet RPC)
 #
 # Usage:  scripts/verify_config.sh
 
@@ -24,7 +27,7 @@ _here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 step "Verify deployed configuration — Stellar testnet"
 
 require_cmd stellar
-require_testnet
+require_verified_testnet
 require_env PROOFOWL_CONTRACT_ID      "C... address of the deployed instance"
 require_env PROOFOWL_ADMIN_ADDRESS    "G... address you expect as admin"
 require_env PROOFOWL_ATTESTOR_ADDRESS "G... address you expect as attestor"
@@ -33,15 +36,12 @@ _source="${PROOFOWL_VERIFY_IDENTITY:-${PROOFOWL_ADMIN_IDENTITY:-}}"
 [ -n "${_source}" ] || \
   die "set PROOFOWL_VERIFY_IDENTITY (or PROOFOWL_ADMIN_IDENTITY) to a keystore alias to read from"
 
-_rpc_args=""
-[ -n "${PROOFOWL_RPC_URL:-}" ] && _rpc_args="--rpc-url ${PROOFOWL_RPC_URL}"
-
 read_fn() {
-  # shellcheck disable=SC2086
   stellar contract invoke \
     --id "${PROOFOWL_CONTRACT_ID}" \
     --source "${_source}" \
-    --network testnet ${_rpc_args} \
+    --rpc-url "${PROOFOWL_VERIFIED_RPC}" \
+    --network-passphrase "${PROOFOWL_VERIFIED_PASSPHRASE}" \
     --send=no \
     -- "$1" \
     | tr -d '"[:space:]'

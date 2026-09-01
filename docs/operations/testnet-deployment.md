@@ -15,7 +15,8 @@ right keys.
 | Requirement | Notes |
 |---|---|
 | Rust 1.84+ with `wasm32v1-none` | `rustup target add wasm32v1-none` |
-| [Stellar CLI](https://developers.stellar.org/docs/tools/developer-tools/cli/stellar-cli) | `stellar --version` ≥ 22; provides `contract deploy/invoke` |
+| [Stellar CLI](https://developers.stellar.org/docs/tools/developer-tools/cli/stellar-cli) | `stellar --version` ≥ 22 (validated on 28.0.0); provides `contract deploy/invoke` and the `tx` subcommands used for multi-signature flows |
+| `curl` | the scripts use it to verify the RPC's network passphrase |
 | A funded **testnet** deployer account | Fund via <https://friendbot.stellar.org> or `stellar keys fund`. The helper scripts **do not** fund anything. |
 | `make check` passing on the exact commit you intend to ship | The lockfile (`Cargo.lock`) is committed, so the WASM is reproducible. |
 
@@ -52,7 +53,15 @@ public `G...` addresses.
 
 ## 3. Testnet-only guardrails
 
-- The helper scripts refuse to run unless `STELLAR_NETWORK=testnet`.
+- **Two-layer network check.** The scripts refuse to run unless
+  `STELLAR_NETWORK=testnet` (declared intent) **and** a live
+  `getNetwork` call to the RPC they will use reports the exact Stellar
+  testnet passphrase, `Test SDF Network ; September 2015`. The mainnet
+  passphrase is positively refused. Any error — unreachable RPC, blank
+  or unexpected passphrase — aborts. The RPC URL must be `https://`.
+- The scripts pass `--rpc-url` and `--network-passphrase` explicitly
+  (both taken from that verified `getNetwork` response); they do not
+  depend on a named `--network testnet` CLI config existing.
 - The scripts never call friendbot, never `stellar keys generate`, and
   never deploy as a side effect of being `source`d — deployment happens
   only when you explicitly run `scripts/deploy_testnet.sh`.
@@ -114,7 +123,8 @@ scripts/deploy_testnet.sh
 #   stellar contract deploy \
 #     --wasm target/wasm32v1-none/release/proofowl_contracts.wasm \
 #     --source "$PROOFOWL_ADMIN_IDENTITY" \
-#     --network testnet \
+#     --rpc-url <verified testnet RPC> \
+#     --network-passphrase "Test SDF Network ; September 2015" \
 #     -- \
 #     --admin "$PROOFOWL_ADMIN_ADDRESS" \
 #     --attestor "$PROOFOWL_ATTESTOR_ADDRESS"
@@ -165,3 +175,48 @@ fund it.
 | `verify_config.sh` reports a mismatch | deployed against the wrong addresses | the instance is unusable — deploy a fresh one (§4) |
 | smoke test `link_github` fails | attestor alias/address mismatch, or the wallet identity is unfunded | check `PROOFOWL_ATTESTOR_*`, fund the smoke wallet |
 | you deployed from the wrong commit | — | deploy a fresh instance from the right commit; abandon the old ID |
+
+---
+
+## 7. Two-party authorization on the Stellar CLI
+
+`link_github` and `unlink_github` each call `require_auth()` on **two
+independent addresses** — the contributor `wallet` and the `attestor`.
+One CLI `--source` argument cannot authorize both: `--source` signs the
+transaction envelope and the address's *root* Soroban auth entry only.
+The second address's `require_auth()` produces a *non-root* auth entry
+that needs its own signature.
+
+**Approach used by `scripts/smoke_test.sh` (single supported CLI
+command):**
+
+```
+stellar contract invoke --id <C...> \
+  --rpc-url <verified testnet RPC> \
+  --network-passphrase "Test SDF Network ; September 2015" \
+  --source        <wallet-identity>     \   # signs tx + wallet's root auth entry
+  --sign-with-key <attestor-identity>   \   # signs the attestor's non-root auth entry
+  --auto-sign                           \   # don't prompt for the non-root entry
+  -- link_github \
+     --wallet <G...wallet> --attestor <G...attestor> \
+     --github_id_hash <64-hex>
+```
+
+Both identities live in the local Stellar CLI keystore; no secret key is
+ever placed on the command line or in a file. `submit_attestation` needs
+only the attestor, so it is a plain single-`--source` invoke.
+
+**Fallback (explicit build → sign → send), if a CLI version does not
+assemble the non-root entry in one step:**
+
+```
+stellar contract invoke ... --source <wallet> --build-only -- link_github ...  > tx.xdr
+stellar tx sign --sign-with-key <wallet>              tx.xdr                    > tx1.xdr
+stellar tx sign --sign-with-key <attestor> --auto-sign tx1.xdr                 > tx2.xdr
+stellar tx send tx2.xdr
+```
+
+This uses only `stellar` subcommands — no extra client, no new
+dependency, and nothing added to the contract's public API. The
+`.xdr` files are transient and must never be committed (they are
+covered by `.gitignore`).

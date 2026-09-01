@@ -14,6 +14,12 @@
 !.env.example
 *.key
 
+# Transient transaction material (built/signed tx envelopes, auth entries)
+# — never commit these.
+*.xdr
+*.tx
+auth-entry-*.json
+
 # rustfmt backups
 **/*.rs.bk
 
