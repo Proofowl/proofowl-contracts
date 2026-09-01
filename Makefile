@@ -14,9 +14,14 @@ WASM_CRATE  ?= proofowl_contracts
 WASM_OUT    := target/$(WASM_TARGET)/release/$(WASM_CRATE).wasm
 
 # Pinned tool versions for the optional supply-chain targets. CI pins the
-# same versions; keep them in sync.
-CARGO_DENY_VERSION  ?= 0.16.4
-CARGO_AUDIT_VERSION ?= 0.21.2
+# same versions; keep them in sync (see .github/workflows/ci.yml and
+# deny.toml).
+CARGO_DENY_VERSION  ?= 0.20.2
+CARGO_AUDIT_VERSION ?= 0.22.2
+
+# Advisory ignored in deny.toml with a documented rationale; keep the
+# `cargo audit` invocation consistent with it.
+AUDIT_IGNORE ?= --ignore RUSTSEC-2024-0436
 
 .DEFAULT_GOAL := help
 
@@ -71,13 +76,12 @@ clean: ## Remove build artifacts and regenerated test snapshots
 #   cargo install --locked --version $(CARGO_AUDIT_VERSION) cargo-audit
 
 .PHONY: deny
-deny: ## cargo-deny: license / bans / sources (deterministic) + advisories
+deny: ## cargo-deny: bans / licenses / sources (deterministic) + advisories
 	@command -v cargo-deny >/dev/null 2>&1 || { \
 		echo "cargo-deny not installed. Run:"; \
 		echo "  cargo install --locked --version $(CARGO_DENY_VERSION) cargo-deny"; \
 		exit 1; }
-	$(CARGO) deny check bans licenses sources
-	$(CARGO) deny check advisories
+	$(CARGO) deny check
 
 .PHONY: audit
 audit: ## cargo-audit: known-vulnerability scan against Cargo.lock
@@ -85,7 +89,7 @@ audit: ## cargo-audit: known-vulnerability scan against Cargo.lock
 		echo "cargo-audit not installed. Run:"; \
 		echo "  cargo install --locked --version $(CARGO_AUDIT_VERSION) cargo-audit"; \
 		exit 1; }
-	$(CARGO) audit
+	$(CARGO) audit $(AUDIT_IGNORE)
 
 .PHONY: supply-chain
 supply-chain: deny audit ## Run every supply-chain check (needs network + tools)

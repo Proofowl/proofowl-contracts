@@ -4,6 +4,15 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Weekly, so a newly published advisory is caught even without a
+    # commit. Monday 04:17 UTC.
+    - cron: "17 4 * * 1"
+
+# GitHub Actions below are pinned to major version tags. Moving to full
+# commit-SHA pins is a tracked hardening task (see docs/MAINTAINERS.md /
+# PRODUCTION_READINESS.md) that needs a maintainer with network access to
+# verify each SHA against the upstream action repository.
 
 jobs:
   test:
@@ -36,3 +45,39 @@ jobs:
 
       - name: Test
         run: cargo test --all
+
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.84
+
+      # cargo-deny / cargo-audit are pinned by exact version and cached by
+      # that version key, so CI stays reproducible and fast. Bump the
+      # versions here, in the Makefile, and re-validate deny.toml together.
+      - name: Cache supply-chain tools
+        id: cache-tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-deny
+            ~/.cargo/bin/cargo-audit
+          key: supply-chain-tools-${{ runner.os }}-cargo-deny-0.20.2-cargo-audit-0.22.2
+
+      - name: Install cargo-deny and cargo-audit
+        if: steps.cache-tools.outputs.cache-hit != 'true'
+        run: |
+          cargo install --locked --version 0.20.2 cargo-deny
+          cargo install --locked --version 0.22.2 cargo-audit
+
+      # Deterministic given Cargo.lock: bans, licenses, sources. Plus the
+      # advisories check (network — RustSec DB); a single documented
+      # exception lives in deny.toml.
+      - name: cargo-deny
+        run: cargo deny check
+
+      # Secondary scan. Same documented exception as deny.toml.
+      - name: cargo-audit
+        run: cargo audit --ignore RUSTSEC-2024-0436

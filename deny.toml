@@ -1,0 +1,79 @@
+# cargo-deny configuration — https://embarkstudios.github.io/cargo-deny/
+#
+# Split intent:
+#   * `bans`, `licenses`, `sources`  -> fully deterministic given
+#     Cargo.lock; run as a hard CI gate.
+#   * `advisories`                    -> pulls the RustSec DB from the
+#     network, so a newly published advisory can fail a previously green
+#     build. Run it too, but also on a schedule, and treat a new finding
+#     as "triage now", not "the tree is broken".
+#
+# Keep the pinned tool version in the Makefile / CI in sync with what you
+# validate locally.
+
+[graph]
+# Check the target we actually ship plus a host target so dev-dependencies
+# (soroban-sdk testutils, the integration test) are evaluated too.
+targets = [
+    { triple = "wasm32v1-none" },
+    { triple = "x86_64-unknown-linux-gnu" },
+    { triple = "aarch64-apple-darwin" },
+]
+all-features = true
+
+[advisories]
+# Fail on any security vulnerability or unmaintained advisory. Add a
+# time-boxed entry here (with a comment and a date) only when there is no
+# fixed version and the risk has been assessed.
+yanked = "deny"
+ignore = [
+    # RUSTSEC-2024-0436 — `paste` (proc-macro helper) is unmaintained.
+    # This is an *unmaintained* notice, not a vulnerability. `paste` is a
+    # compile-time-only transitive dependency pulled in by soroban-sdk
+    # (via ark-ff / soroban-wasmi); there is no path in Cargo.lock that
+    # lets us drop or upgrade it independently, and cargo-deny itself
+    # reports "No safe upgrade is available".
+    # Action: revisit on every soroban-sdk bump; drop this entry once the
+    # SDK's tree no longer depends on `paste`.
+    # First assessed: 2026-09-01.
+    { id = "RUSTSEC-2024-0436", reason = "unmaintained (not a vuln); compile-time-only transitive dep of soroban-sdk with no available upgrade" },
+]
+
+[licenses]
+# Permissive licenses only. This crate is MIT; every dependency must be
+# compatible with redistributing an MIT-licensed WASM artifact.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "MPL-2.0",
+    "CC0-1.0",
+    "BSL-1.0",
+]
+confidence-threshold = 0.9
+# Per-crate license exceptions go here, each with a reason.
+exceptions = []
+
+[bans]
+# Duplicate versions in a large FFI/SDK tree are common and not a defect;
+# surface them without failing the build.
+multiple-versions = "warn"
+# A "*" version requirement is never acceptable in a contract crate.
+wildcards = "deny"
+allow-wildcard-paths = false
+# Explicit allow/deny lists for specific crates, if ever needed.
+allow = []
+deny = []
+
+[sources]
+# Only crates.io. No git or alternative-registry dependencies.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
