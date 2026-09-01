@@ -1,0 +1,156 @@
+name: Testnet release (manual)
+
+# ─────────────────────────────────────────────────────────────────────
+#  SKELETON — this workflow NEVER deploys automatically.
+#
+#  - It runs only on manual `workflow_dispatch`.
+#  - The default action is `build-only`: build the release WASM, print
+#    its sha256, and upload it as an artifact. Nothing is deployed.
+#  - Deploying requires ALL of:
+#      1. `execute` input set to `deploy-testnet`
+#      2. `confirm` input typed exactly as `deploy-testnet`
+#      3. a protected GitHub Environment named `testnet` configured by a
+#         maintainer with required reviewers and the secrets/vars below
+#      4. those secrets/vars actually being set (they are not, by default)
+#
+#  Required for the deploy job (configure on the `testnet` Environment;
+#  no real values live in this repo):
+#      secret  TESTNET_DEPLOYER_SECRET   Stellar secret key (S...) of a
+#                                        funded testnet deployer that is
+#                                        ALSO the contract admin, OR is
+#                                        accompanied by an admin signer.
+#      var     TESTNET_ADMIN_ADDRESS     G... admin address (constructor arg)
+#      var     TESTNET_ATTESTOR_ADDRESS  G... attestor address (constructor arg)
+#      var     TESTNET_RPC_URL           optional RPC override (no creds)
+#      var     STELLAR_CLI_VERSION       exact stellar-cli version you have
+#                                        validated (no default is baked in)
+#
+#  Mainnet is intentionally not supported by this workflow.
+# ─────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit SHA or tag to build (blank = the ref this workflow runs on)"
+        required: false
+        default: ""
+      execute:
+        description: "What to do"
+        required: true
+        default: "build-only"
+        type: choice
+        options:
+          - build-only
+          - deploy-testnet
+      confirm:
+        description: "Type 'deploy-testnet' to confirm a deploy (ignored for build-only)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      sha256: ${{ steps.hash.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.84
+        with:
+          targets: wasm32v1-none
+
+      - name: Build release WASM
+        run: cargo build --target wasm32v1-none --release
+
+      - name: Hash the artifact
+        id: hash
+        run: |
+          f=target/wasm32v1-none/release/proofowl_contracts.wasm
+          test -f "$f"
+          sha="$(sha256sum "$f" | awk '{print $1}')"
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "WASM sha256: $sha"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: proofowl_contracts-wasm
+          path: target/wasm32v1-none/release/proofowl_contracts.wasm
+          if-no-files-found: error
+
+  deploy-testnet:
+    needs: build
+    # Every guard must hold. Remove none of these.
+    if: >-
+      inputs.execute == 'deploy-testnet' &&
+      inputs.confirm == 'deploy-testnet'
+    runs-on: ubuntu-latest
+    # The `testnet` Environment must exist and be protected (required
+    # reviewers). If it is not configured, this job cannot run.
+    environment: testnet
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Guard — refuse without configured deploy credentials
+        env:
+          DEPLOYER_SECRET: ${{ secrets.TESTNET_DEPLOYER_SECRET }}
+          ADMIN_ADDRESS: ${{ vars.TESTNET_ADMIN_ADDRESS }}
+          ATTESTOR_ADDRESS: ${{ vars.TESTNET_ATTESTOR_ADDRESS }}
+        run: |
+          missing=0
+          [ -n "$DEPLOYER_SECRET" ]  || { echo "::error::secret TESTNET_DEPLOYER_SECRET is not set"; missing=1; }
+          [ -n "$ADMIN_ADDRESS" ]    || { echo "::error::var TESTNET_ADMIN_ADDRESS is not set"; missing=1; }
+          [ -n "$ATTESTOR_ADDRESS" ] || { echo "::error::var TESTNET_ATTESTOR_ADDRESS is not set"; missing=1; }
+          [ "$missing" -eq 0 ] || { echo "Refusing to deploy: configure the testnet Environment first."; exit 1; }
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: proofowl_contracts-wasm
+          path: dist
+
+      - name: Install Stellar CLI (pinned by the testnet Environment)
+        env:
+          # Set `STELLAR_CLI_VERSION` as a var on the `testnet`
+          # Environment to the exact version you have validated. No
+          # default is baked in so an unverified version is never used.
+          STELLAR_CLI_VERSION: ${{ vars.STELLAR_CLI_VERSION }}
+        run: |
+          [ -n "${STELLAR_CLI_VERSION:-}" ] || {
+            echo "::error::set var STELLAR_CLI_VERSION on the testnet Environment"; exit 1; }
+          cargo install --locked --version "$STELLAR_CLI_VERSION" stellar-cli
+
+      - name: Deploy + run constructor (testnet)
+        env:
+          DEPLOYER_SECRET: ${{ secrets.TESTNET_DEPLOYER_SECRET }}
+          ADMIN_ADDRESS: ${{ vars.TESTNET_ADMIN_ADDRESS }}
+          ATTESTOR_ADDRESS: ${{ vars.TESTNET_ATTESTOR_ADDRESS }}
+          RPC_URL: ${{ vars.TESTNET_RPC_URL }}
+        run: |
+          set -euo pipefail
+          rpc_args=""
+          [ -n "${RPC_URL:-}" ] && rpc_args="--rpc-url ${RPC_URL}"
+          # shellcheck disable=SC2086
+          stellar contract deploy \
+            --wasm dist/proofowl_contracts.wasm \
+            --source-account "$DEPLOYER_SECRET" \
+            --network testnet $rpc_args \
+            -- \
+            --admin "$ADMIN_ADDRESS" \
+            --attestor "$ATTESTOR_ADDRESS"
+
+      - name: Reminder
+        run: |
+          echo "Deploy attempted. Now run scripts/verify_config.sh and"
+          echo "scripts/smoke_test.sh from an operator machine, and record"
+          echo "the instance (commit SHA, wasm sha256 ${{ needs.build.outputs.sha256 }},"
+          echo "contract id, admin/attestor) per docs/RELEASE_CHECKLIST.md."
