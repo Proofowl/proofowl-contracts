@@ -19,9 +19,12 @@
 #
 # Two-party calls: link_github / unlink_github each require TWO
 # independent require_auth() addresses. This uses the Stellar CLI's
-# supported multi-signature invoke: --source signs the transaction and
-# its root auth entry; --sign-with-key + --auto-sign signs the second
-# address's non-root Soroban auth entry. See
+# supported multi-signature invoke: --source signs the transaction
+# envelope and the source address's root auth entry; --auto-sign then
+# signs every remaining non-root Soroban auth entry by matching the
+# entry's address to an identity in the local keystore (here, the
+# attestor). Do NOT add --sign-with-key for this: it replaces the
+# envelope signer and yields TxBadAuth. See
 # docs/operations/testnet-deployment.md section 7.
 #
 # Required environment (see .env.example):
@@ -97,12 +100,16 @@ invoke_1() {
     --source "${src}" "$@"
 }
 
-# invoke_2 <source-ident> <cosigner-ident> -- fn args...   (two-party write)
+# invoke_2 <source-ident> -- fn args...   (two-party write)
+# --source signs the envelope + root auth entry; --auto-sign signs the
+# other require_auth address's non-root entry from the keystore. The
+# co-signer identity must simply be present in the keystore (it is
+# resolved by the entry's address, not passed here).
 invoke_2() {
-  local src="$1" co="$2"; shift 2
+  local src="$1"; shift
   stellar contract invoke --id "${CID}" \
     --rpc-url "${RPC}" --network-passphrase "${PASS}" \
-    --source "${src}" --sign-with-key "${co}" --auto-sign "$@"
+    --source "${src}" --auto-sign "$@"
 }
 
 # tx_hash_from_stderr — pull the 64-hex transaction hash out of CLI logs.
@@ -114,7 +121,7 @@ evidence() { printf 'EVIDENCE %s\n' "$*"; }
 
 # ---------------------------------------------------------------------------
 step "1/7  link_github  (wallet + attestor, two-party)"
-out="$(invoke_2 "${PROOFOWL_SMOKE_WALLET_IDENTITY}" "${PROOFOWL_ATTESTOR_IDENTITY}" \
+out="$(invoke_2 "${PROOFOWL_SMOKE_WALLET_IDENTITY}" \
         -- link_github \
         --wallet "${WALLET_ADDR}" \
         --attestor "${PROOFOWL_ATTESTOR_ADDRESS}" \
@@ -198,7 +205,7 @@ evidence "step=5 name=duplicate_pr status=rejected_as_expected error=DuplicateAt
 
 # ---------------------------------------------------------------------------
 step "6/7  unlink_github  (wallet + attestor, two-party)"
-out="$(invoke_2 "${PROOFOWL_SMOKE_WALLET_IDENTITY}" "${PROOFOWL_ATTESTOR_IDENTITY}" \
+out="$(invoke_2 "${PROOFOWL_SMOKE_WALLET_IDENTITY}" \
         -- unlink_github \
         --wallet "${WALLET_ADDR}" \
         --attestor "${PROOFOWL_ATTESTOR_ADDRESS}" \

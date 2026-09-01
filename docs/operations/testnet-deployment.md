@@ -193,32 +193,46 @@ The second address's `require_auth()` produces a *non-root* auth entry
 that needs its own signature.
 
 **Approach used by `scripts/smoke_test.sh` (single supported CLI
-command):**
+command), verified on Stellar CLI 28.0.0 against the live testnet
+instance:**
 
 ```
 stellar contract invoke --id <C...> \
   --rpc-url <verified testnet RPC> \
   --network-passphrase "Test SDF Network ; September 2015" \
-  --source        <wallet-identity>     \   # signs tx + wallet's root auth entry
-  --sign-with-key <attestor-identity>   \   # signs the attestor's non-root auth entry
-  --auto-sign                           \   # don't prompt for the non-root entry
+  --source <wallet-identity> \
+  --auto-sign \
   -- link_github \
      --wallet <G...wallet> --attestor <G...attestor> \
      --github_id_hash <64-hex>
 ```
 
-Both identities live in the local Stellar CLI keystore; no secret key is
-ever placed on the command line or in a file. `submit_attestation` needs
-only the attestor, so it is a plain single-`--source` invoke.
+`--source` signs the transaction envelope and the wallet's *root* auth
+entry. `--auto-sign` is what assembles the second signature: after
+simulation the CLI holds the attestor's *non-root* Soroban auth entry
+and signs it with the keystore identity whose address matches (here, the
+attestor). Both identities live in the local Stellar CLI keystore; no
+secret key is placed on a command line or in a file.
 
-**Fallback (explicit build → sign → send), if a CLI version does not
-assemble the non-root entry in one step:**
+**Do not add `--sign-with-key <attestor>` for this.** On CLI 28
+`--sign-with-key` replaces the envelope signer, so the wallet (the
+`--source`) no longer signs the envelope and submission fails with
+`TxBadAuth`. `--sign-with-key` is for adding *account* signers (classic
+multisig), not for signing a Soroban auth entry.
+
+`submit_attestation` needs only the attestor, so it is a plain
+single-`--source` invoke with no `--auto-sign`.
+
+**Fallback (explicit build → simulate → sign → send)** if a future CLI
+changes `--auto-sign` behaviour. Signing an auth entry mutates the tx,
+so sign the non-root entry *before* the envelope:
 
 ```
-stellar contract invoke ... --source <wallet> --build-only -- link_github ...  > tx.xdr
-stellar tx sign --sign-with-key <wallet>              tx.xdr                    > tx1.xdr
+stellar contract invoke ... --source <wallet> --build-only -- link_github ...  > tx0.xdr
+stellar tx simulate --source-account <wallet> tx0.xdr                          > tx1.xdr
 stellar tx sign --sign-with-key <attestor> --auto-sign tx1.xdr                 > tx2.xdr
-stellar tx send tx2.xdr
+stellar tx sign --sign-with-key <wallet>              tx2.xdr                   > tx3.xdr
+stellar tx send tx3.xdr
 ```
 
 This uses only `stellar` subcommands — no extra client, no new
