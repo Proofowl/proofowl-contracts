@@ -15,6 +15,33 @@ Testnet section below); no mainnet deployment exists.
 
 ## [Unreleased]
 
+### Integration contract (Phase 3)
+- **Versioned integration spec** under `docs/integration/`:
+  `contract-api-v1.md` (every function — params, auth, errors, events,
+  TTL effects; the two-party authorization rule), `identifier-spec-v1.md`
+  (canonical `github_id_hash` from the immutable numeric user id, and
+  `pr_hash`, with normalization / rejection rules and pinned vectors),
+  `attestor-protocol-v1.md` (what the backend must verify before using
+  the attestor key), `event-indexer-v1.md` (event topics/payloads,
+  ordering, idempotency, `(network, contractId)` partitioning, TTL
+  monitoring), and `sequence-diagrams.md`.
+- **TypeScript SDK** at `sdk/typescript/` (`@proofowl/contract-sdk`):
+  generated bindings from `stellar contract bindings typescript` (kept
+  in `src/generated/`, regenerated via `npm run generate`, drift-checked
+  in CI); a read-only `createReadClient` built with no signer;
+  `prepare*` helpers returning **unsigned** transactions (two-party
+  helpers report which addresses still must sign); canonical
+  `hashGitHubUserIdV1` / `normalizeGitHubPullRequest` /
+  `hashGitHubPullRequestV1` with unit-pinned vectors; and an opt-in
+  read-only testnet integration test. The SDK never signs, submits, or
+  reads a keystore.
+- **Tooling**: `make sdk-install` / `sdk-generate` / `sdk-test` /
+  `integration-check` / `sdk-integration-testnet`; CI gains a Node-only
+  `sdk` job and a `sdk-bindings-drift` job. `make check` stays
+  Rust-only; the Rust / WASM / supply-chain / testnet gates are
+  unchanged.
+- The contract itself was **not modified** in this phase.
+
 ### Testnet
 - **Testnet alpha deployed** (2026-09-01, contract source `d030908`).
   Contract ID `CCJ7DVU2XYVFNZMHN4VPCYSPJ7HW4RPI544XG5TG42ZX7TDSUIL3SKP6`

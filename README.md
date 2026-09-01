@@ -237,9 +237,27 @@ fit together and which ones exist today.
 | Trust model & vulnerability reporting | [`SECURITY.md`](./SECURITY.md) |
 | Architecture decisions | [`docs/adr/`](./docs/adr) |
 
-Nothing has been deployed, tagged, released, or audited. The manual
+Nothing has been released to a registry, tagged, or audited. One
+disposable instance is deployed to **testnet** (see *Deployed contracts*
+above); there is no mainnet deployment. The manual
 [`testnet-release`](./.github/workflows/testnet-release.yml) workflow
 never deploys by default.
+
+## Integration (for the future backend & frontend)
+
+The contract is done and testnet-verified. The **backend, indexer, and
+frontend are future repositories that do not exist yet.** These
+documents and the SDK are what they will consume:
+
+| Resource | Purpose |
+|---|---|
+| [`docs/integration/`](./docs/integration/) | Versioned integration contract — [API](./docs/integration/contract-api-v1.md), [identifier spec](./docs/integration/identifier-spec-v1.md), [attestor protocol](./docs/integration/attestor-protocol-v1.md), [event/indexer](./docs/integration/event-indexer-v1.md), [sequence diagrams](./docs/integration/sequence-diagrams.md) |
+| [`sdk/typescript/`](./sdk/typescript/) | Typed read-only client + canonical hash helpers + unsigned-transaction preparation. Never signs or submits. Generated bindings are drift-checked in CI. |
+
+The contract ABI in the deployed WASM is authoritative; the docs
+describe it. `make integration-check` runs the SDK gate;
+`make sdk-integration-testnet` runs the opt-in **read-only** testnet
+check.
 
 ## Contributing
 

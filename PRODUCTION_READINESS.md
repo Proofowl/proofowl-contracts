@@ -63,14 +63,18 @@ does not extend to any standing testnet service or to mainnet.
 
 | # | Criterion | Status |
 |---|---|---|
+| 4.0 | Versioned integration contract published (API, identifiers, attestor protocol, events/indexer) | MET — `docs/integration/*-v1.md` |
+| 4.0b | Typed SDK consumable: read-only client, unsigned-tx prep, canonical hash helpers, generated-binding drift check | MET — `sdk/typescript/`; unit tests + an opt-in read-only testnet check pass |
 | 4.1 | Backend (`proofowl-backend`) exists and performs GitHub OAuth / verification | NOT MET — future repository |
 | 4.2 | Backend co-signs `link_github` only after verifying GitHub ownership | NOT MET |
-| 4.3 | Attestation submission pipeline derives `pr_hash` canonically | NOT MET |
+| 4.3 | Attestation submission pipeline derives `pr_hash` canonically | NOT MET (the canonical algorithm is now specified and implemented in the SDK; no pipeline consumes it yet) |
 | 4.4 | Event indexer consumes contract events | NOT MET — future repository |
 | 4.5 | Frontend (`proofowl-frontend`) reads passports / leaderboard | NOT MET — future repository |
 | 4.6 | A full path exercised across all components on testnet | NOT MET |
 
-**Gate 4: NO-GO** — only the contract exists today.
+**Gate 4: NO-GO** — the integration contract and SDK exist and are
+tested, but the backend, indexer, and frontend do not. Only the contract
+and its consumables exist today.
 
 ---
 
@@ -117,7 +121,7 @@ Every item below is a hard prerequisite. All are currently **NOT MET**.
 | 1 Local validation | **GO** |
 | 2 CI | **GO** with follow-ups (SHA-pin actions; keep supply-chain green) |
 | 3 Testnet deployment | **GO** (disposable alpha deployed, verified, smoke-tested — 2026-09-01) |
-| 4 E2E integration | **NO-GO** (dependent repositories do not exist) |
+| 4 E2E integration | **NO-GO** (integration contract + SDK exist; backend / indexer / frontend do not) |
 | 5 Security review | **NO-GO** (no internal or external review) |
 | 6 Mainnet | **NO-GO** (out of scope) |
 

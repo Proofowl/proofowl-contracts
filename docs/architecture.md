@@ -74,3 +74,24 @@ The chain trusts the **attestor key** for *what happened*; it never lets
 the attestor choose *whose* wallet gets credit. GitHub ownership is
 established off-chain by the backend and vouched for on-chain by the
 attestor co-signature. Full detail: `SECURITY.md`.
+
+## Integration contract (what the future repos build against)
+
+The contract exists and is testnet-verified; the backend, indexer, and
+frontend do not exist yet. The interface between them is pinned in
+[`integration/`](./integration/):
+
+- [`contract-api-v1.md`](./integration/contract-api-v1.md) — every
+  function, error, event, and TTL effect;
+- [`identifier-spec-v1.md`](./integration/identifier-spec-v1.md) — the
+  canonical `github_id_hash` and `pr_hash` construction;
+- [`attestor-protocol-v1.md`](./integration/attestor-protocol-v1.md) —
+  what the backend must verify before using the attestor key;
+- [`event-indexer-v1.md`](./integration/event-indexer-v1.md) — event
+  consumption and passport derivation;
+- [`sequence-diagrams.md`](./integration/sequence-diagrams.md) — the
+  three end-to-end flows.
+
+The [`sdk/typescript/`](../sdk/typescript/) package is a typed,
+read-only, non-signing consumer of the contract that implements the
+identifier spec.
