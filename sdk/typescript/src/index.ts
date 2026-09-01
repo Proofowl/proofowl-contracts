@@ -11,6 +11,7 @@
 export * from "./config.js";
 export * from "./errors.js";
 export * from "./client.js";
+export * from "./identifiers.js";
 
 /** The raw generated bindings (regenerated from the WASM; do not edit). */
 export * as generated from "./generated/index.js";
