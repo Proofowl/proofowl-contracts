@@ -46,14 +46,16 @@ Legend: `MET` · `PARTIAL` · `NOT MET` · `N/A`
 |---|---|---|
 | 3.1 | Documented deploy procedure with three-key separation | MET (`docs/operations/testnet-deployment.md`) |
 | 3.2 | Helper scripts: build, deploy, verify-config, smoke-test | MET (`scripts/`) |
-| 3.3 | Scripts refuse non-testnet, validate inputs, never print secrets, never fund/generate keys | MET |
+| 3.3 | Scripts refuse non-testnet, validate inputs, never print secrets, never fund/generate keys | MET — network now verified via a live `getNetwork` call, mainnet passphrase positively refused |
 | 3.4 | Manual-only release workflow that never deploys by default | MET (`.github/workflows/testnet-release.yml`) |
-| 3.5 | An instance actually deployed to testnet | NOT MET — nothing has been deployed |
-| 3.6 | `verify_config.sh` + `smoke_test.sh` run green against a live instance | NOT MET |
-| 3.7 | Instance log started (commit SHA, WASM sha256, contract ID, addresses) | NOT MET |
-| 3.8 | Stellar CLI available to the operator | NOT MET in this environment — operator must install it |
+| 3.5 | An instance actually deployed to testnet | **MET** — `CCJ7DVU2XYVFNZMHN4VPCYSPJ7HW4RPI544XG5TG42ZX7TDSUIL3SKP6` (2026-09-01, src `d030908`); on-chain WASM hash matches the local build |
+| 3.6 | `verify_config.sh` + `smoke_test.sh` run green against a live instance | **MET** — config verified; 7-step smoke test passed (see `docs/testnet/phase2-alpha.md`) |
+| 3.7 | Instance log started (commit SHA, WASM sha256, contract ID, addresses, tx hashes) | **MET** — `docs/testnet/phase2-alpha.md` |
+| 3.8 | Stellar CLI available to the operator | MET locally (28.0.0 installed); still a per-operator setup step, documented in the ops guide |
 
-**Gate 3: NO-GO** — procedure and tooling are ready; no deployment has happened.
+**Gate 3: GO for a disposable testnet alpha.** One instance is deployed,
+verified, and smoke-tested. It is disposable and may be replaced; this
+does not extend to any standing testnet service or to mainnet.
 
 ---
 
@@ -114,11 +116,12 @@ Every item below is a hard prerequisite. All are currently **NOT MET**.
 |---|---|
 | 1 Local validation | **GO** |
 | 2 CI | **GO** with follow-ups (SHA-pin actions; keep supply-chain green) |
-| 3 Testnet deployment | **NO-GO** (ready to attempt; not yet done) |
+| 3 Testnet deployment | **GO** (disposable alpha deployed, verified, smoke-tested — 2026-09-01) |
 | 4 E2E integration | **NO-GO** (dependent repositories do not exist) |
 | 5 Security review | **NO-GO** (no internal or external review) |
 | 6 Mainnet | **NO-GO** (out of scope) |
 
-The honest one-line status: **the contract and its release engineering
-are ready for a first testnet deployment; nothing beyond that is ready,
-and nothing has been deployed or audited.**
+The honest one-line status: **the contract runs correctly on Stellar
+testnet (one disposable alpha instance, deployed and smoke-tested).
+Nothing beyond that is ready — no backend/indexer/frontend, no security
+review, no audit, no mainnet.**

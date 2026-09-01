@@ -208,9 +208,10 @@ value the attestor supplies.
 
 ## Deployed contracts
 
-| Network | Contract ID |
-|---|---|
-| Testnet | _not yet deployed_ |
+| Network | Contract ID | Source | Notes |
+|---|---|---|---|
+| **Testnet** | `CCJ7DVU2XYVFNZMHN4VPCYSPJ7HW4RPI544XG5TG42ZX7TDSUIL3SKP6` | `d030908` | Alpha, 2026-09-01. WASM `d694e0ad…ef96dbf1`. Verified + smoke-tested — [evidence](./docs/testnet/phase2-alpha.md). Disposable; may be replaced. |
+| Mainnet | _not deployed — out of scope_ | — | See [`PRODUCTION_READINESS.md`](./PRODUCTION_READINESS.md) |
 
 ## Repositories
 

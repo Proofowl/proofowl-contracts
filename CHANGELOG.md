@@ -9,9 +9,29 @@ breaking change for an on-chain contract.
 
 The project is **pre-1.0**: while the major version is `0`, any release
 may change contract behaviour, storage layout, or interfaces. Nothing in
-this project has been released, tagged, deployed, or audited yet.
+this project has been released to a package registry, tagged, or audited.
+A first instance has been deployed to **Stellar testnet** (see the
+Testnet section below); no mainnet deployment exists.
 
 ## [Unreleased]
+
+### Testnet
+- **Testnet alpha deployed** (2026-09-01, contract source `d030908`).
+  Contract ID `CCJ7DVU2XYVFNZMHN4VPCYSPJ7HW4RPI544XG5TG42ZX7TDSUIL3SKP6`
+  on Stellar testnet. On-chain WASM hash
+  `d694e0ad3193e3c2782f9c92d9e88ce6a2f4faef545f9df434b01b41ef96dbf1`
+  matches the local release build. A seven-step end-to-end smoke test
+  (two-party link, attestation, reads, invalid-complexity rejection,
+  duplicate-PR rejection, two-party unlink, reputation retained after
+  unlink) passed against the live instance. Full public evidence:
+  [`docs/testnet/phase2-alpha.md`](docs/testnet/phase2-alpha.md).
+  This is testnet only — not an audit, not a mainnet-readiness claim.
+- Testnet helper scripts now verify the network via a live `getNetwork`
+  call (mainnet passphrase positively refused) and deploy with
+  `--optimize=false` so on-chain bytes match the recorded hash.
+- Corrected the two-party CLI signing flow for `link_github` /
+  `unlink_github` (`--source <wallet> --auto-sign`, no `--sign-with-key`)
+  after a live `TxBadAuth`; documented in the operations guide §7.
 
 ### Added
 - Deploy-time `__constructor(admin, attestor)` — configuration is bound
