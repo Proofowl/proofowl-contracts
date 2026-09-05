@@ -80,26 +80,31 @@ and `docs/security/resource-profile-v1.md` rather than repeating them.
       `tests/state_machine.rs` (every rejected-action branch asserts
       `assert_model_unchanged`).
 
-### 1.5 TTL / storage durability
+### 1.5 TTL / storage durability (v0.2: bounded, two-call maintenance)
 
 - [ ] Every mutating call extends the TTL of every persistent entry it
       touches, plus the instance.
-- [ ] `bump_wallet_ttl` refreshes the wallet link, the GitHub link, the
-      history vector, **and every `SeenPr` marker referenced by that
-      history** — not just the vector itself.
-- [ ] `bump_wallet_ttl` requires no authorization and changes no
-      observable data.
+- [ ] `bump_wallet_core_ttl` refreshes the wallet link, the GitHub
+      link, the attestation counter, and the reputation score — O(1).
+- [ ] `bump_attestations_ttl_page` refreshes one page of attestation
+      entries **and every `SeenPr` marker referenced by that page**,
+      bounded by `limit`, across multiple pages including old ones.
+- [ ] Both TTL functions require no authorization and change no
+      observable data (link, count, score, or any attestation content).
 - [ ] TTL extend-to / threshold constants are clamped to
       `env.storage().max_ttl()`.
-- [ ] Evidence: `src/test.rs` §7, `tests/ttl_replay.rs` (all).
+- [ ] Evidence: `src/test.rs` §8, `tests/ttl_replay.rs` (all).
 
 ### 1.6 Events
 
 - [ ] Every successful mutating call emits exactly the event
-      `docs/integration/event-indexer-v1.md` documents for it, with the
-      documented topics and data fields.
+      `docs/integration/event-indexer-v2.md` documents for it, with the
+      documented topics and data fields (`AttestationRecorded` includes
+      the v0.2 `sequence` field).
 - [ ] No event is emitted on a failed call.
-- [ ] `bump_wallet_ttl` emits no event (documented as silent).
+- [ ] Neither TTL function (`bump_wallet_core_ttl`,
+      `bump_attestations_ttl_page`) emits an event (documented as
+      silent).
 - [ ] Evidence: `tests/boundary_and_events.rs` §5–6.
 
 ### 1.7 Identifiers and cross-implementation consistency
@@ -122,9 +127,13 @@ and `docs/security/resource-profile-v1.md` rather than repeating them.
 - [ ] The per-wallet history storage design's growth characteristics are
       measured, not assumed, and the exact failure mode (not just
       "gets expensive") is identified.
-- [ ] The measured hard ceiling and its implications are documented with
-      an explicit verdict.
-- [ ] Evidence: `docs/security/resource-profile-v1.md`,
+- [ ] The measured ceiling (or, for v0.2, absence of one at the tested
+      scale) and its implications are documented with an explicit
+      verdict, including any open items (v0.2: the not-fully-root-caused
+      write-cost growth with total contract entry count,
+      `resource-profile-v2.md` §2).
+- [ ] Evidence: `docs/security/resource-profile-v1.md` (v0.1 finding),
+      `docs/security/resource-profile-v2.md` (v0.2 candidate evidence),
       `tests/resource_profile.rs`.
 
 ### 1.9 Supply chain
@@ -228,7 +237,8 @@ security-testing standpoint:
 | TTL refresh correctness, replay resistance | `tests/ttl_replay.rs` |
 | Boundary values, event emission | `tests/boundary_and_events.rs` |
 | Cross-language hash vector agreement | `tests/sdk_vectors.rs` |
-| Resource growth and hard ceiling | `tests/resource_profile.rs` (diagnostic; `make resource-profile`) |
+| Resource growth (v0.1 ceiling, v0.2 evidence) | `tests/resource_profile.rs` (diagnostic; `make resource-profile`) |
+| Bounded-storage structural regression guard | `scripts/check_bounded_storage.sh` (`make check-bounded-storage`, part of `make check`) |
 | SDK identifier helpers | `sdk/typescript/src/identifiers.test.ts` |
 | SDK error-code sync with generated bindings | `sdk/typescript/src/errors.test.ts` |
 | Generated-binding drift vs. built WASM | `.github/workflows/ci.yml` `sdk-bindings-drift` job |

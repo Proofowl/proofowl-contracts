@@ -10,6 +10,12 @@ disposable and friendbot-funded. No secret keys, seed phrases, `.env`
 values, CLI keystore files, or authorization-entry material appear in
 this document — every value below is public on-chain data.
 
+**This record describes the v0.1 contract**, which is what the instance
+below actually runs. v0.1's attestation-storage design has since been
+superseded by a local v0.2 candidate (not deployed anywhere) — see
+[`../migrations/v0.1-to-v0.2.md`](../migrations/v0.1-to-v0.2.md). This
+document is kept unedited as the accurate record of this deployment.
+
 ---
 
 ## Part A — build & environment

@@ -1,8 +1,21 @@
 # ProofOwl event & indexer integration contract v1
 
-Status: **normative** for `v1`. Describes every contract event and how an
-indexer (or the backend) should consume them to build passport history
-and scores without ever diverging dangerously from on-chain truth.
+Status: **superseded for a v0.2 target — historical record of the v0.1
+event/indexer contract.** See
+[`event-indexer-v2.md`](./event-indexer-v2.md) for what changed
+(`AttestationRecorded`'s new `sequence` field, paginated TTL monitoring
+in §6, paginated passport-building in §7) and
+[`../migrations/v0.1-to-v0.2.md`](../migrations/v0.1-to-v0.2.md). Most
+of this document (event ordering/idempotency, replay safety,
+partitioning, divergence handling) is unchanged in substance and is not
+duplicated in v2 — read it here.
+
+---
+
+Status (original, v0.1): **normative** for `v1`. Describes every
+contract event and how an indexer (or the backend) should consume them
+to build passport history and scores without ever diverging
+dangerously from on-chain truth.
 
 ## 0. Authority
 

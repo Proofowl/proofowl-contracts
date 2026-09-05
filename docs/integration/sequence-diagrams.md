@@ -3,12 +3,15 @@
 Three flows across the ProofOwl system. **Only the Soroban contract and
 the TypeScript SDK exist today** — the backend, indexer, and frontend are
 future repositories, drawn here to show where each contract call fits.
+Updated for the **v0.2** API (paginated attestation reads and bounded
+TTL maintenance) — see
+[`../migrations/v0.1-to-v0.2.md`](../migrations/v0.1-to-v0.2.md).
 
 Cross-references:
-[`contract-api-v1.md`](./contract-api-v1.md) ·
-[`identifier-spec-v1.md`](./identifier-spec-v1.md) ·
-[`attestor-protocol-v1.md`](./attestor-protocol-v1.md) ·
-[`event-indexer-v1.md`](./event-indexer-v1.md).
+[`contract-api-v2.md`](./contract-api-v2.md) ·
+[`identifier-spec-v1.md`](./identifier-spec-v1.md) (unchanged) ·
+[`attestor-protocol-v2.md`](./attestor-protocol-v2.md) ·
+[`event-indexer-v2.md`](./event-indexer-v2.md).
 
 ## 1. Verified wallet ↔ GitHub linking (two-party)
 
@@ -73,7 +76,7 @@ sequenceDiagram
     alt happy path
         C-->>C: require_auth(attestor); complexity ok; resolve wallet from GithubLink
         C-->>C: SeenPr(pr_hash) unseen -> append Attestation; write SeenPr; extend TTLs
-        C-->>BE: Ok(wallet) ; event AttestationRecorded{wallet, repo, pr_number, issue_id, complexity, pr_hash, timestamp}
+        C-->>BE: Ok(wallet) ; event AttestationRecorded{wallet, repo, pr_number, issue_id, complexity, pr_hash, timestamp, sequence}
         C-->>IDX: (via getEvents) AttestationRecorded
     else contributor not linked yet
         C-->>BE: Err WalletNotLinked (#7)
@@ -109,10 +112,15 @@ sequenceDiagram
     SDK->>RPC: simulate get_github_for_wallet
     RPC->>C: (view)
     C-->>SDK: Option<BytesN<32>>
-    FE->>SDK: getAttestations(wallet) ; getReputationScore(wallet)
-    SDK->>RPC: simulate get_attestations / get_reputation_score
-    RPC-->>SDK: Attestation[] ; u32
-    SDK-->>FE: typed values
+    FE->>SDK: getAttestationCount(wallet) ; getReputationScore(wallet)
+    SDK->>RPC: simulate get_attestation_count / get_reputation_score
+    RPC-->>SDK: u32 ; u32
+    loop until a page returns fewer than MAX_PAGE_SIZE entries
+        FE->>SDK: getAttestationsPage(wallet, start, MAX_PAGE_SIZE)
+        SDK->>RPC: simulate get_attestations_page
+        RPC-->>SDK: Attestation[] (bounded by MAX_PAGE_SIZE)
+        SDK-->>FE: typed page
+    end
     FE->>FE: for each attestation, verifyAttestationPrHash(repo, prNumber, prHashHex)
     Note over FE,IDX: on disagreement, the contract read wins; reconcile the cache
     FE-->>Viewer: passport (labelled with network + contractId; testnet data marked as such)
@@ -120,4 +128,4 @@ sequenceDiagram
 
 No signature, no fee, no state change. The read methods are
 authoritative; indexer/cache state is a convenience
-([`event-indexer-v1.md`](./event-indexer-v1.md) §0).
+([`event-indexer-v2.md`](./event-indexer-v2.md) §0).

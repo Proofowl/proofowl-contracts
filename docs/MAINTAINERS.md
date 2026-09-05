@@ -73,6 +73,7 @@ do not imply otherwise in any reply or document.
 ## Once an instance is live (future phase)
 
 - Monitor that active passports stay above the TTL threshold; run or
-  schedule `bump_wallet_ttl` for cold records (see `SECURITY.md` §5).
+  schedule `bump_wallet_core_ttl` + a paginated `bump_attestations_ttl_page`
+  sweep for cold records (see `SECURITY.md` §5).
 - Watch contract events for anomalies (unexpected `set_attestor`,
   attestation spikes).

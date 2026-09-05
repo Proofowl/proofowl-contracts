@@ -3,6 +3,15 @@
 Companion to the evidence record in
 [`phase2-alpha.md`](./phase2-alpha.md). Testnet only; not an audit.
 
+**This record describes the v0.1 contract.** A later phase measured a
+hard attestation-storage ceiling this retrospective could not have
+known about (nothing here predicted it), then fixed it in a local v0.2
+candidate not yet deployed anywhere — see
+[`../migrations/v0.1-to-v0.2.md`](../migrations/v0.1-to-v0.2.md) and
+[`../security/resource-profile-v2.md`](../security/resource-profile-v2.md).
+This document is kept unedited as the accurate record of what was true
+when it was written.
+
 ## What succeeded
 
 - **The exact committed WASM runs on testnet.** The on-chain code hash

@@ -7,7 +7,7 @@
 #
 #   1. two-party link_github (wallet + attestor)
 #   2. submit_attestation (attestor)
-#   3. reads: get_attestations / get_reputation_score / reverse lookups
+#   3. reads: get_attestation_count / get_attestations_page / get_reputation_score / reverse lookups
 #   4. invalid complexity is rejected            (expected failure)
 #   5. duplicate pr_hash is rejected             (expected failure)
 #   6. two-party unlink_github (wallet + attestor)
@@ -142,20 +142,23 @@ out="$(invoke_1 "${PROOFOWL_ATTESTOR_IDENTITY}" \
 evidence "step=2 name=submit_attestation status=ok tx=$(tx_hash_from_stderr) returned=${out}"
 
 # ---------------------------------------------------------------------------
-step "3/7  reads  (get_attestations / get_reputation_score / reverse lookups)"
-atts="$(invoke_1 "${PROOFOWL_SMOKE_WALLET_IDENTITY}" --send=no -- get_attestations --wallet "${WALLET_ADDR}" 2>/dev/null)"
+step "3/7  reads  (get_attestation_count / get_attestations_page / get_reputation_score / reverse lookups)"
+count="$(invoke_1 "${PROOFOWL_SMOKE_WALLET_IDENTITY}" --send=no -- get_attestation_count --wallet "${WALLET_ADDR}" 2>/dev/null | tr -d '"[:space:]')"
+atts="$(invoke_1 "${PROOFOWL_SMOKE_WALLET_IDENTITY}" --send=no -- get_attestations_page --wallet "${WALLET_ADDR}" --start 0 --limit 50 2>/dev/null)"
 score="$(invoke_1 "${PROOFOWL_SMOKE_WALLET_IDENTITY}" --send=no -- get_reputation_score --wallet "${WALLET_ADDR}" 2>/dev/null | tr -d '"[:space:]')"
 w4g="$(invoke_1 "${PROOFOWL_SMOKE_WALLET_IDENTITY}" --send=no -- get_wallet_for_github --github_id_hash "${GH_HASH}" 2>/dev/null | tr -d '"[:space:]')"
 g4w="$(invoke_1 "${PROOFOWL_SMOKE_WALLET_IDENTITY}" --send=no -- get_github_for_wallet --wallet "${WALLET_ADDR}" 2>/dev/null | tr -d '"[:space:]')"
-info "get_attestations:        ${atts}"
+info "get_attestation_count:   ${count}   (expect 1)"
+info "get_attestations_page:   ${atts}"
 info "get_reputation_score:    ${score}   (expect 100)"
 info "get_wallet_for_github:   ${w4g}   (expect ${WALLET_ADDR})"
 info "get_github_for_wallet:   ${g4w}   (expect ${GH_HASH})"
+[ "${count}" = "1" ]                || die "expected attestation count 1, got '${count}'"
 [ "${score}" = "100" ]              || die "expected score 100, got '${score}'"
 [ "${w4g}" = "${WALLET_ADDR}" ]     || die "reverse lookup mismatch: '${w4g}'"
 [ "${g4w}" = "${GH_HASH}" ]         || die "forward hash lookup mismatch: '${g4w}'"
-case "${atts}" in *"${PR_HASH}"*) : ;; *) die "attestation list missing pr_hash" ;; esac
-evidence "step=3 name=reads status=ok score=${score} wallet_for_github=${w4g} github_for_wallet=${g4w}"
+case "${atts}" in *"${PR_HASH}"*) : ;; *) die "attestation page missing pr_hash" ;; esac
+evidence "step=3 name=reads status=ok count=${count} score=${score} wallet_for_github=${w4g} github_for_wallet=${g4w}"
 
 # ---------------------------------------------------------------------------
 step "4/7  invalid complexity is rejected  (expected failure, complexity=175)"
@@ -217,7 +220,7 @@ step "7/7  link removed, reputation retained"
 w4g2="$(invoke_1 "${PROOFOWL_SMOKE_WALLET_IDENTITY}" --send=no -- get_wallet_for_github --github_id_hash "${GH_HASH}" 2>/dev/null | tr -d '"[:space:]')"
 g4w2="$(invoke_1 "${PROOFOWL_SMOKE_WALLET_IDENTITY}" --send=no -- get_github_for_wallet --wallet "${WALLET_ADDR}" 2>/dev/null | tr -d '"[:space:]')"
 score2="$(invoke_1 "${PROOFOWL_SMOKE_WALLET_IDENTITY}" --send=no -- get_reputation_score --wallet "${WALLET_ADDR}" 2>/dev/null | tr -d '"[:space:]')"
-atts2="$(invoke_1 "${PROOFOWL_SMOKE_WALLET_IDENTITY}" --send=no -- get_attestations --wallet "${WALLET_ADDR}" 2>/dev/null)"
+atts2="$(invoke_1 "${PROOFOWL_SMOKE_WALLET_IDENTITY}" --send=no -- get_attestations_page --wallet "${WALLET_ADDR}" --start 0 --limit 50 2>/dev/null)"
 info "get_wallet_for_github:  ${w4g2}   (expect null / None)"
 info "get_github_for_wallet:  ${g4w2}   (expect null / None)"
 info "get_reputation_score:   ${score2}   (expect 100 — retained)"

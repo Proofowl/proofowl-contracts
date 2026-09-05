@@ -4,15 +4,23 @@ This document is the single place that spells out the trust model, the
 things the contract deliberately does **not** do, the storage-lifetime
 policy, and the known MVP limitations. Read it with `src/lib.rs` open.
 
+**This crate's `src/` is the v0.2 candidate** (paginated attestation
+storage, [ADR 0004](docs/adr/0004-paginated-attestation-storage.md)).
+**No v0.2 instance has been deployed to any network** — see
+[`docs/migrations/v0.1-to-v0.2.md`](docs/migrations/v0.1-to-v0.2.md).
+
 **Phase 4 adversarial and security testing** (2026-09) produced a
 formal threat model, a resource/scalability profile with a measured
-hard storage ceiling, and a consolidated security-review package. Start
-there for anything beyond this document's design-level summary:
+hard storage ceiling (v0.1), and a consolidated security-review
+package. A follow-on phase implemented the storage redesign that
+finding called for. Start with these for anything beyond this
+document's design-level summary:
 
 - [`docs/security/threat-model-v1.md`](docs/security/threat-model-v1.md) — attacker capabilities, assets, mitigations, residual risk, severity, per threat category.
-- [`docs/security/resource-profile-v1.md`](docs/security/resource-profile-v1.md) — measured cost growth and the exact per-wallet history ceiling (286 attestations succeed, the 287th fails outright).
+- [`docs/security/resource-profile-v1.md`](docs/security/resource-profile-v1.md) — the v0.1 finding: measured cost growth and the exact per-wallet history ceiling (286 attestations succeed, the 287th fails outright).
+- [`docs/security/resource-profile-v2.md`](docs/security/resource-profile-v2.md) — the v0.2 candidate's evidence: 1000+ attestations with no ceiling.
 - [`docs/security/security-review-checklist-v1.md`](docs/security/security-review-checklist-v1.md) — line-item review checklist, severity rubric, release-blocker definition, audit handoff checklist.
-- [`docs/security/known-risks-v1.md`](docs/security/known-risks-v1.md) — the honest, ranked list of open risks and accepted limitations.
+- [`docs/security/known-risks-v1.md`](docs/security/known-risks-v1.md) — the honest, ranked list of open risks and accepted limitations, including the v0.2 status update.
 
 ## Reporting a vulnerability
 
@@ -190,24 +198,29 @@ persistent entry it touches **and** the instance entry. In particular
 `submit_attestation` extends the new `SeenPr` marker, the history vector,
 both link records, and the instance.
 
-**Permissionless keep-alive:** `bump_wallet_ttl(wallet)` lets a frontend
-or cron job refresh, without changing any data:
+**Permissionless keep-alive (v0.2 — bounded, two calls):** a frontend or
+cron job refreshes a wallet's records with two calls instead of one,
+per [ADR 0004](docs/adr/0004-paginated-attestation-storage.md):
 
-- `WalletLink(wallet)` and the `GithubLink` it points at;
-- `Attestations(wallet)`;
-- **`SeenPr(pr_hash)` for every attestation in that history** — it loads
-  the history vector and extends each PR-dedup marker.
+- `bump_wallet_core_ttl(wallet)` — O(1): `WalletLink(wallet)`, the
+  `GithubLink` it points at, `AttestationCount(wallet)`, and
+  `ReputationScore(wallet)`.
+- `bump_attestations_ttl_page(wallet, start, limit)` — bounded: extends
+  one page of `AttestationEntry(wallet, seq)` records **and the
+  `SeenPr(pr_hash)` marker each one references**. A full sweep calls
+  this repeatedly with an advancing `start` until the returned count is
+  less than `limit`.
 
-That last point is the fix for a subtle hole: `SeenPr` markers are what
-make duplicate-PR rejection global and permanent, and an earlier version
-of `bump_wallet_ttl` refreshed the history vector but not the markers it
-referenced. If a marker had been allowed to archive, an old merged PR
-could have been re-submitted. Now a single keep-alive covers them.
-(`tests/…bump_wallet_ttl_refreshes_cold_records_including_every_pr_marker`
-and `…keeps_duplicate_pr_rejection_alive`.)
+`SeenPr` markers are what make duplicate-PR rejection global and
+permanent; the paginated sweep is what keeps every one of them warm
+regardless of which page it is on — the same property v0.1's single
+`bump_wallet_ttl` provided for its one-vector history, now achieved
+without loading the whole history in one call. See
+`tests/ttl_replay.rs` for the full test coverage of this split.
 
-The cost of `bump_wallet_ttl` grows with the number of attestations for
-the wallet — see §7.
+The cost of `bump_wallet_core_ttl` is constant; the cost of
+`bump_attestations_ttl_page` is bounded by `limit`, not by the wallet's
+total history size — see `docs/security/resource-profile-v2.md`.
 
 **Constants** (`src/lib.rs`), at the ~5s mainnet ledger cadence
 (1 day ≈ 17 280 ledgers):
@@ -222,13 +235,13 @@ comfortably under the mainnet/testnet persistent-entry cap (~180 days) so
 there is no silent clamp in normal operation. Records touched at least
 once every ~90 days never come close to archival; genuinely cold records
 (a contributor who links and then disappears) can be revived by anyone
-via `bump_wallet_ttl` before the 120-day horizon, or restored with
-`RestoreFootprint` afterwards.
+via the two keep-alive calls above before the 120-day horizon, or
+restored with `RestoreFootprint` afterwards.
 
 **Entries covered:** `WalletLink`, `GithubLink`, `SeenPr`,
-`Attestations`, and the instance (`Admin` / `Attestor`) — every
-persistent record the contract writes. No record is left on the default
-TTL.
+`AttestationEntry`, `AttestationCount`, `ReputationScore`, and the
+instance (`Admin` / `Attestor`) — every persistent record the contract
+writes. No record is left on the default TTL.
 
 ## 6. First testnet deployment checklist
 
@@ -252,33 +265,31 @@ TTL.
    possible on-chain.)
 6. Smoke-test one full path on testnet: `link_github` (co-signed by a
    throwaway wallet + attestor) → `submit_attestation` → check
-   `get_attestations` / `get_reputation_score` → `unlink_github`.
+   `get_attestation_count` / `get_attestations_page` /
+   `get_reputation_score` → `unlink_github`.
 7. Record the contract id in `README.md` under *Deployed contracts* and
    tag the release.
 8. Hand the `attestor` address to the backend team; keep the `admin` key
    offline / in a hardware signer. Plan the `set_attestor` rotation to a
    multisig before mainnet.
 
-## 7. Known MVP limitations
+## 7. Known limitations
 
-- **Attestation storage does not scale, and now has a measured hard
-  ceiling.** Each wallet's attestations are a single `Vec<Attestation>`
-  under `Attestations(wallet)`. `get_attestations`,
-  `get_reputation_score`, and `bump_wallet_ttl` load and iterate the
-  whole vector; every `submit_attestation` deserialises, appends, and
-  re-serialises it. Phase 4's `tests/resource_profile.rs` measured
-  exactly where this stops working: **286 attestations succeed for one
-  wallet; the 287th `submit_attestation` call fails outright** (the
-  entry exceeds Soroban's 65,536-byte per-contract-data-entry ceiling),
-  after which that wallet can never receive another attestation or TTL
-  refresh, with no recovery path. See
+- **Attestation storage scaling — resolved in this v0.2 candidate,
+  pending live validation.** v0.1 kept a single `Vec<Attestation>` per
+  wallet under `Attestations(wallet)`, which Phase 4's
+  `tests/resource_profile.rs` measured to fail outright at 286
+  attestations (65,536-byte per-entry ceiling) — see
   [`docs/security/resource-profile-v1.md`](docs/security/resource-profile-v1.md)
-  for the full measurement, verdict, and a scoped (not implemented)
-  redesign proposal — one persistent entry per attestation keyed by
-  `(wallet, seq)`, a `count`, and a running `score` counter, so reads
-  and keep-alives are O(1) / O(page). Deferred deliberately: it is a
-  storage-layout change, not a security fix to apply reactively, and
-  Phase 4's mandate was to measure and document, not redesign.
+  for that finding, kept unedited. This crate's current `src/lib.rs`
+  replaces it with one persistent entry per attestation keyed by
+  `(wallet, seq)`, a `count`, and a running `score` counter
+  ([ADR 0004](docs/adr/0004-paginated-attestation-storage.md)), measured
+  to hold 1000+ attestations with no failure
+  ([`docs/security/resource-profile-v2.md`](docs/security/resource-profile-v2.md)).
+  **This is a local candidate — it has not been deployed to any
+  network, audited, or exercised live.** See
+  [`docs/migrations/v0.1-to-v0.2.md`](docs/migrations/v0.1-to-v0.2.md).
 - **Lost-wallet-key recovery is deferred** (§4.2).
 - **Cross-wallet history migration is deferred** (§4.2).
 - **Single trusted attestor** (§1.2) — rotation to a multisig/threshold

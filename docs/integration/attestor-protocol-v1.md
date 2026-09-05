@@ -1,8 +1,18 @@
 # ProofOwl attestor integration protocol v1
 
-Status: **normative** for the `proofowl-backend` service. Versioned as
-`v1`. This document defines what the backend MUST do **before** it uses
-the attestor key to:
+Status: **superseded for a v0.2 target — historical record of the v0.1
+protocol.** See [`attestor-protocol-v2.md`](./attestor-protocol-v2.md)
+for what changed (mainly §8 idempotency/reconciliation and §13's error
+table) and [`../migrations/v0.1-to-v0.2.md`](../migrations/v0.1-to-v0.2.md).
+Most of this document (trust boundaries, OAuth proof, PR verification,
+rotation, unlink, rate limiting, audit logging) is unchanged in
+substance and is not duplicated in v2 — read it here.
+
+---
+
+Status (original, v0.1): **normative** for the `proofowl-backend`
+service. Versioned as `v1`. This document defines what the backend MUST
+do **before** it uses the attestor key to:
 
 - co-sign a wallet ↔ GitHub identity link (`link_github`);
 - submit a contribution attestation (`submit_attestation`);

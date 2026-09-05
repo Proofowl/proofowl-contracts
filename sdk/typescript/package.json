@@ -1,6 +1,6 @@
 {
   "name": "@proofowl/contract-sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Typed read-only client and canonical identifier helpers for the ProofOwl Soroban contract",

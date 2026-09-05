@@ -26,7 +26,7 @@ flowchart TB
     backend -- "3. submit_attestation(github_id_hash, …)" --> contract
     contract -- "events: GithubLinked / AttestationRecorded / …" --> indexer
     indexer --> frontend
-    frontend -- "reads: get_attestations / get_reputation_score" --> contract
+    frontend -- "reads: get_attestations_page / get_reputation_score" --> contract
     dev -- "browse passport" --> frontend
 
     classDef planned stroke-dasharray:5 5,fill:#f6f6f6,color:#333;
@@ -77,20 +77,29 @@ attestor co-signature. Full detail: `SECURITY.md`.
 
 ## Integration contract (what the future repos build against)
 
-The contract exists and is testnet-verified; the backend, indexer, and
-frontend do not exist yet. The interface between them is pinned in
-[`integration/`](./integration/):
+The contract's source is at v0.2 (paginated attestation storage,
+[ADR 0004](./adr/0004-paginated-attestation-storage.md)); only a v0.1
+instance is testnet-verified — no v0.2 instance has been deployed
+anywhere (see [`migrations/v0.1-to-v0.2.md`](./migrations/v0.1-to-v0.2.md)).
+The backend, indexer, and frontend do not exist yet. The current
+interface between them is pinned in [`integration/`](./integration/):
 
-- [`contract-api-v1.md`](./integration/contract-api-v1.md) — every
+- [`contract-api-v2.md`](./integration/contract-api-v2.md) — every
   function, error, event, and TTL effect;
 - [`identifier-spec-v1.md`](./integration/identifier-spec-v1.md) — the
-  canonical `github_id_hash` and `pr_hash` construction;
-- [`attestor-protocol-v1.md`](./integration/attestor-protocol-v1.md) —
+  canonical `github_id_hash` and `pr_hash` construction (unchanged in
+  v0.2);
+- [`attestor-protocol-v2.md`](./integration/attestor-protocol-v2.md) —
   what the backend must verify before using the attestor key;
-- [`event-indexer-v1.md`](./integration/event-indexer-v1.md) — event
-  consumption and passport derivation;
+- [`event-indexer-v2.md`](./integration/event-indexer-v2.md) — event
+  consumption and paginated passport derivation;
 - [`sequence-diagrams.md`](./integration/sequence-diagrams.md) — the
-  three end-to-end flows.
+  three end-to-end flows, updated for the v0.2 API.
+
+Historical v0.1 documents (`contract-api-v1.md`,
+`attestor-protocol-v1.md`, `event-indexer-v1.md`) describe the deployed
+testnet alpha instance and are linked from
+[`integration/README.md`](./integration/README.md).
 
 The [`sdk/typescript/`](../sdk/typescript/) package is a typed,
 read-only, non-signing consumer of the contract that implements the

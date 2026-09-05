@@ -499,6 +499,17 @@ current expected MVP volumes); becomes the **primary blocker** for
 unbounded production/mainnet scope without the storage redesign already
 flagged in `SECURITY.md` §7 — see the resource profile's verdict.
 
+**Update — v0.2:** the storage redesign this section called for has
+been implemented in a local candidate
+(`docs/adr/0004-paginated-attestation-storage.md`); the hard,
+unbounded-history-locks-TTL-maintenance failure mode described above is
+resolved by construction there — see
+`docs/security/resource-profile-v2.md`. This threat-model entry is kept
+as written (describing v0.1, which is what was analyzed at the time)
+rather than rewritten, per this repository's practice of not erasing
+findings; `docs/security/known-risks-v1.md`'s R1 entry carries the
+current status.
+
 ---
 
 ## 12. Identifier-hash collisions or canonicalization disagreement

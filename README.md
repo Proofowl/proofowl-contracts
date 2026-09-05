@@ -9,6 +9,15 @@
 > contributions on-chain — portable, checkable by anyone, and outliving
 > any single program's backend.
 
+**This repository's `src/` is the v0.2 candidate** (paginated
+attestation storage — [ADR 0004](./docs/adr/0004-paginated-attestation-storage.md)).
+**No v0.2 instance has been deployed to any network.** The only live
+instance is the v0.1 testnet alpha listed under
+[Deployed contracts](#deployed-contracts), which speaks the older,
+unbounded-history ABI. See
+[`docs/migrations/v0.1-to-v0.2.md`](./docs/migrations/v0.1-to-v0.2.md)
+before integrating against either.
+
 ## The problem
 
 Programs like [Drips Wave](https://drips.network/wave/stellar) track
@@ -97,29 +106,35 @@ deploy transaction must be signed by the admin. See
 
 Soroban archives a persistent entry once its TTL runs out. Every registry
 record here — wallet links, GitHub links, PR-dedup markers, attestation
-histories, and the contract instance — has its TTL extended on every
-write. Anyone can call `bump_wallet_ttl(wallet)` to keep a passport warm
-for free; it refreshes the wallet link, the GitHub link, the attestation
-history, **and every `SeenPr` de-duplication marker in that history**, so
-a merged PR can never become re-submittable through TTL expiry. Policy
-and constants are in
-[`SECURITY.md`](./SECURITY.md#5-storage-durability-ttl-policy).
+entries and counters, and the contract instance — has its TTL extended
+on every write. Anyone can call `bump_wallet_core_ttl(wallet)` (O(1): the
+link, counter, and score) plus `bump_attestations_ttl_page(wallet, start,
+limit)` (bounded, one page of history at a time) to keep a passport warm
+for free — together they refresh the wallet link, the GitHub link, the
+attestation counter and score, every attestation entry, and every
+`SeenPr` de-duplication marker, so a merged PR can never become
+re-submittable through TTL expiry. Policy and constants are in
+[`SECURITY.md`](./SECURITY.md#5-storage-durability-ttl-policy); the
+bounded-TTL design is in
+[ADR 0004](./docs/adr/0004-paginated-attestation-storage.md).
 
-## Known MVP limitation — attestation storage
+## Attestation storage — v0.2 (paginated, no ceiling)
 
-A wallet's attestations live in one `Vec<Attestation>` under a single
-key. Reads, `bump_wallet_ttl`, and each new `submit_attestation` load or
-rewrite the whole vector, so cost grows with a contributor's history —
-and it has a measured hard ceiling: **286 attestations succeed for one
-wallet, the 287th fails outright** (the entry exceeds Soroban's
-per-contract-data-entry size limit), after which that wallet can never
-receive another attestation or TTL refresh. Fine for MVP volumes;
-production scale needs paginated / indexed storage (one entry per
-attestation + a running score counter) before a contributor could
-realistically reach that ceiling. Deliberately deferred — see
-[`SECURITY.md`](./SECURITY.md#7-known-mvp-limitations) and
-[`docs/security/resource-profile-v1.md`](./docs/security/resource-profile-v1.md)
-for the full measurement and verdict.
+v0.1 kept a wallet's attestations in one `Vec<Attestation>` under a
+single key, which had a measured hard ceiling: **286 attestations
+succeeded for one wallet, the 287th failed outright** (the entry
+exceeded Soroban's per-contract-data-entry size limit) — see
+[`docs/security/resource-profile-v1.md`](./docs/security/resource-profile-v1.md).
+**v0.2 replaces this** with one persistent entry per attestation
+(`get_attestation_count`, `get_attestation`, `get_attestations_page`)
+plus a running reputation-score counter, so no single entry's size
+depends on history length any more. Measured to hold 1000+ attestations
+for one wallet with no failure and no entry approaching the size limit
+— see [ADR 0004](./docs/adr/0004-paginated-attestation-storage.md) and
+[`docs/security/resource-profile-v2.md`](./docs/security/resource-profile-v2.md).
+**This is a local candidate; it has not been deployed, audited, or
+exercised against a live network** — see
+[`docs/migrations/v0.1-to-v0.2.md`](./docs/migrations/v0.1-to-v0.2.md).
 
 ## Quick start
 
@@ -150,6 +165,11 @@ job — see [Operations & release](#operations--release).
 
 ### Deploy (testnet)
 
+**No v0.2 instance has been deployed anywhere — deploying this crate's
+current `src/` requires a separate, explicit approval this repository
+does not currently record.** The steps below describe the deploy
+*mechanism* (unchanged since ADR 0003), not an authorization to run it.
+
 Configuration is passed as constructor arguments to `stellar contract
 deploy` itself — there is no follow-up `init` call. Sign with the admin
 identity so the constructor's `admin.require_auth()` is satisfied:
@@ -168,7 +188,9 @@ That single transaction deploys the instance and runs `__constructor`
 atomically. Verify with `get_admin` / `get_attestor`. Full checklist in
 [`SECURITY.md`](./SECURITY.md#6-first-testnet-deployment-checklist).
 
-## Contract API
+## Contract API (v0.2)
+
+Full spec: [`docs/integration/contract-api-v2.md`](./docs/integration/contract-api-v2.md).
 
 | Function | Caller(s) | Description |
 |---|---|---|
@@ -177,12 +199,20 @@ atomically. Verify with `get_admin` / `get_attestor`. Full checklist in
 | `link_github(wallet, attestor, github_id_hash)` | **both** `wallet` and `attestor` | Two-party wallet ↔ GitHub link |
 | `unlink_github(wallet, attestor, github_id_hash)` | **both** linked `wallet` and `attestor` | Clear a link for recovery / relink |
 | `submit_attestation(attestor, github_id_hash, repo, pr_number, issue_id, complexity, pr_hash)` | `attestor` | Record a verified contribution; returns the credited wallet |
-| `bump_wallet_ttl(wallet)` | anyone | Keep-alive: extends TTL on the wallet link, GitHub link, history, and every `SeenPr` marker in it |
-| `get_attestations(wallet)` | anyone (read) | Full attestation history for a wallet |
-| `get_reputation_score(wallet)` | anyone (read) | Summed score across all attestations |
+| `get_attestation_count(wallet)` | anyone (read) | How many attestations a wallet has |
+| `get_attestation(wallet, sequence)` | anyone (read) | One attestation by zero-based index |
+| `get_attestations_page(wallet, start, limit)` | anyone (read) | Bounded page of history, `limit` up to `MAX_PAGE_SIZE` (50) |
+| `get_reputation_score(wallet)` | anyone (read) | Running score total — O(1) |
+| `bump_wallet_core_ttl(wallet)` | anyone | O(1) keep-alive: wallet link, GitHub link, counter, score |
+| `bump_attestations_ttl_page(wallet, start, limit)` | anyone | Bounded keep-alive for one page of history + its `SeenPr` markers |
 | `get_wallet_for_github(github_id_hash)` | anyone (read) | Forward lookup: identity → wallet |
 | `get_github_for_wallet(wallet)` | anyone (read) | Reverse lookup: wallet → identity hash |
 | `get_admin()` / `get_attestor()` | anyone (read) | Current admin / attestor address |
+
+**Removed in v0.2** (unbounded, replaced by the paginated functions
+above): `get_attestations(wallet) -> Vec<Attestation>`,
+`bump_wallet_ttl(wallet)`. See
+[`docs/migrations/v0.1-to-v0.2.md`](./docs/migrations/v0.1-to-v0.2.md).
 
 ### What `pr_hash` is
 
@@ -212,13 +242,21 @@ value the attestor supplies.
 | 7 | `WalletNotLinked` | no wallet linked for that identity hash |
 | 8 | `InvalidComplexity` | `complexity` not in `{0, 100, 150, 200}` |
 | 9 | `LinkNotFound` | `unlink_github` target is not a consistent link |
+| 10 | `InvalidPageLimit` | a paginated call's `limit` was `0` (v0.2) |
+| 11 | `PageLimitExceeded` | a paginated call's `limit` exceeded `MAX_PAGE_SIZE` (50) (v0.2) |
+| 12 | `SequenceOutOfRange` | `get_attestation`'s `sequence` is `>=` the wallet's count (v0.2) |
+| 13 | `PageStartOutOfRange` | a paginated call's `start` is `>` the wallet's count (v0.2) |
+
+Codes 1–9 are byte-for-byte unchanged from v0.1; 10–13 are v0.2
+additions, appended not renumbered.
 
 ## Deployed contracts
 
-| Network | Contract ID | Source | Notes |
-|---|---|---|---|
-| **Testnet** | `CCJ7DVU2XYVFNZMHN4VPCYSPJ7HW4RPI544XG5TG42ZX7TDSUIL3SKP6` | `d030908` | Alpha, 2026-09-01. WASM `d694e0ad…ef96dbf1`. Verified + smoke-tested — [evidence](./docs/testnet/phase2-alpha.md). Disposable; may be replaced. |
-| Mainnet | _not deployed — out of scope_ | — | See [`PRODUCTION_READINESS.md`](./PRODUCTION_READINESS.md) |
+| Network | Contract ID | Source | Version | Notes |
+|---|---|---|---|---|
+| **Testnet** | `CCJ7DVU2XYVFNZMHN4VPCYSPJ7HW4RPI544XG5TG42ZX7TDSUIL3SKP6` | `d030908` | **v0.1** | Alpha, 2026-09-01. WASM `d694e0ad…ef96dbf1`. Verified + smoke-tested — [evidence](./docs/testnet/phase2-alpha.md). Disposable; may be replaced. Speaks the v0.1 ABI (unbounded `get_attestations` / `bump_wallet_ttl`) — see [`docs/migrations/v0.1-to-v0.2.md`](./docs/migrations/v0.1-to-v0.2.md). |
+| Testnet | _not deployed_ | this repo's `src/` | **v0.2** | Local candidate only. Deploying it needs a separate, explicit approval not yet given. |
+| Mainnet | _not deployed — out of scope_ | — | — | See [`PRODUCTION_READINESS.md`](./PRODUCTION_READINESS.md) |
 
 ## Repositories
 
@@ -244,6 +282,7 @@ fit together and which ones exist today.
 | Trust model & vulnerability reporting | [`SECURITY.md`](./SECURITY.md) |
 | Architecture decisions | [`docs/adr/`](./docs/adr) |
 | Threat model, resource profile, security review checklist, known risks | [`docs/security/`](./docs/security/) |
+| Version migrations (v0.1 → v0.2, and future) | [`docs/migrations/`](./docs/migrations/) |
 
 Nothing has been released to a registry, tagged, or audited. One
 disposable instance is deployed to **testnet** (see *Deployed contracts*
@@ -253,19 +292,22 @@ never deploys by default.
 
 ## Integration (for the future backend & frontend)
 
-The contract is done and testnet-verified. The **backend, indexer, and
-frontend are future repositories that do not exist yet.** These
-documents and the SDK are what they will consume:
+The contract source is at v0.2; the **backend, indexer, and frontend
+are future repositories that do not exist yet**, and no v0.2 instance
+has been deployed anywhere for them to eventually target. These
+documents and the SDK describe what they will consume, once one exists:
 
 | Resource | Purpose |
 |---|---|
-| [`docs/integration/`](./docs/integration/) | Versioned integration contract — [API](./docs/integration/contract-api-v1.md), [identifier spec](./docs/integration/identifier-spec-v1.md), [attestor protocol](./docs/integration/attestor-protocol-v1.md), [event/indexer](./docs/integration/event-indexer-v1.md), [sequence diagrams](./docs/integration/sequence-diagrams.md) |
-| [`sdk/typescript/`](./sdk/typescript/) | Typed read-only client + canonical hash helpers + unsigned-transaction preparation. Never signs or submits. Generated bindings are drift-checked in CI. |
+| [`docs/integration/`](./docs/integration/) | Versioned integration contract — current: [API v2](./docs/integration/contract-api-v2.md), [identifier spec v1](./docs/integration/identifier-spec-v1.md) (unchanged), [attestor protocol v2](./docs/integration/attestor-protocol-v2.md), [event/indexer v2](./docs/integration/event-indexer-v2.md), [sequence diagrams](./docs/integration/sequence-diagrams.md). Historical v0.1 docs are linked from [`docs/integration/README.md`](./docs/integration/README.md). |
+| [`sdk/typescript/`](./sdk/typescript/) | Typed read-only client with paginated attestation helpers + canonical hash helpers + unsigned-transaction preparation. Never signs or submits. Targets v0.2. Generated bindings are drift-checked in CI. |
+| [`docs/migrations/v0.1-to-v0.2.md`](./docs/migrations/v0.1-to-v0.2.md) | What changed, what didn't, and what v0.1's place is going forward. |
 
-The contract ABI in the deployed WASM is authoritative; the docs
-describe it. `make integration-check` runs the SDK gate;
+The contract ABI in the deployed WASM is authoritative once a v0.2
+instance exists; until then, `src/lib.rs` and `docs/integration/*-v2.md`
+are. `make integration-check` runs the SDK gate;
 `make sdk-integration-testnet` runs the opt-in **read-only** testnet
-check.
+check (always skipped today — no v0.2 instance to check against).
 
 ## Contributing
 

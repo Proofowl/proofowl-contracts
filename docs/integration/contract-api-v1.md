@@ -1,9 +1,24 @@
 # ProofOwl contract API — integration spec v1
 
-Status: **stable for the current contract**. Versioned as `v1`; a new
-file (`contract-api-v2.md`) will be added if the contract's public
-interface changes (see [`RELEASE_POLICY.md`](../RELEASE_POLICY.md) for
-what counts as a breaking change).
+Status: **superseded — historical record of the v0.1 contract.**
+The v0.2 candidate (`docs/adr/0004-paginated-attestation-storage.md`)
+removed `get_attestations` / `bump_wallet_ttl` and added paginated
+replacements plus new error codes; this document no longer matches
+`src/lib.rs`. See
+[`contract-api-v2.md`](./contract-api-v2.md) for the current API and
+[`../migrations/v0.1-to-v0.2.md`](../migrations/v0.1-to-v0.2.md) for
+what changed and why. Kept unedited below as the accurate description
+of what the v0.1 testnet alpha instance
+(`CCJ7DVU2XYVFNZMHN4VPCYSPJ7HW4RPI544XG5TG42ZX7TDSUIL3SKP6`) actually
+runs — do not build new integrations against it.
+
+---
+
+Status (original, v0.1): **stable for the current contract**. Versioned
+as `v1`; a new file (`contract-api-v2.md`) will be added if the
+contract's public interface changes (see
+[`RELEASE_POLICY.md`](../RELEASE_POLICY.md) for what counts as a
+breaking change).
 
 ## Source of truth
 

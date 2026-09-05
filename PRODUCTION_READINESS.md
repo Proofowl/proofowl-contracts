@@ -10,9 +10,13 @@ Legend: `MET` · `PARTIAL` · `NOT MET` · `N/A`
 Security-specific evidence backing Gates 5 and 6 lives under
 [`docs/security/`](docs/security/) — see
 [`threat-model-v1.md`](docs/security/threat-model-v1.md),
-[`resource-profile-v1.md`](docs/security/resource-profile-v1.md),
+[`resource-profile-v1.md`](docs/security/resource-profile-v1.md) (v0.1
+finding) / [`resource-profile-v2.md`](docs/security/resource-profile-v2.md)
+(v0.2 candidate evidence),
 [`security-review-checklist-v1.md`](docs/security/security-review-checklist-v1.md),
-and [`known-risks-v1.md`](docs/security/known-risks-v1.md).
+and [`known-risks-v1.md`](docs/security/known-risks-v1.md). The v0.2
+storage redesign is a **local candidate only** — see
+[`docs/migrations/v0.1-to-v0.2.md`](docs/migrations/v0.1-to-v0.2.md).
 
 ---
 
@@ -115,7 +119,7 @@ Every item below is a hard prerequisite. All are currently **NOT MET**.
 | 6.3 | Attestor is a multisig / threshold scheme, not a single key (`set_attestor` path exercised) | NOT MET |
 | 6.4 | Admin key in a hardware signer with a documented custody policy | NOT MET |
 | 6.5 | Testnet instance run for a sustained period with real backend + indexer traffic | NOT MET |
-| 6.6 | Per-wallet attestation storage scaling addressed or bounded (`SECURITY.md` §7) | NOT MET — now measured precisely: 286 attestations succeed, the 287th fails outright (`docs/security/resource-profile-v1.md`). Verdict: requires the paginated-storage redesign that document scopes, or an enforced per-wallet cap, before mainnet or unbounded production scope |
+| 6.6 | Per-wallet attestation storage scaling addressed or bounded (`SECURITY.md` §7) | **PARTIAL** — the paginated-storage redesign is implemented in a **local v0.2 candidate** (`docs/adr/0004-paginated-attestation-storage.md`), measured to hold 1000+ attestations with no ceiling (`docs/security/resource-profile-v2.md`). Not MET for this gate because v0.2 has not been deployed to any network, audited, or exercised live — see `docs/migrations/v0.1-to-v0.2.md`. The original v0.1 finding (286/287) remains in `docs/security/resource-profile-v1.md`, unedited. |
 | 6.7 | Incident-response runbook and on-call owner | NOT MET |
 | 6.8 | Immutability accepted in writing by the project owner (no upgrade path exists) | NOT MET |
 
@@ -132,7 +136,7 @@ Every item below is a hard prerequisite. All are currently **NOT MET**.
 | 3 Testnet deployment | **GO** (disposable alpha deployed, verified, smoke-tested — 2026-09-01) |
 | 4 E2E integration | **NO-GO** (integration contract + SDK exist; backend / indexer / frontend do not) |
 | 5 Security review | **NO-GO** (internal threat-model + adversarial testing done, Phase 4 2026-09; external audit still not done) |
-| 6 Mainnet | **NO-GO** (out of scope; storage ceiling now measured at 286/287 attestations, see `docs/security/resource-profile-v1.md`) |
+| 6 Mainnet | **NO-GO** (out of scope; storage redesign exists as a local v0.2 candidate, not yet deployed/audited — see `docs/migrations/v0.1-to-v0.2.md` and `docs/security/resource-profile-v2.md`) |
 
 The honest one-line status: **the contract runs correctly on Stellar
 testnet (one disposable alpha instance, deployed and smoke-tested), and

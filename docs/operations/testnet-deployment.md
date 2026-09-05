@@ -8,6 +8,16 @@ Nothing in this repository deploys automatically. Every command below is
 run by a human operator, deliberately, from a machine that holds the
 right keys.
 
+**This repository's `src/` currently builds the v0.2 candidate**
+(paginated attestation storage —
+[ADR 0004](../adr/0004-paginated-attestation-storage.md)). Deploying it
+anywhere requires a separate, explicit approval that has not been
+given as of this document — the only live instance today is the v0.1
+testnet alpha described in `../testnet/phase2-alpha.md`. The mechanism
+below is version-agnostic (constructor args, two-party signing, TTL
+keep-alive) and applies to whichever version an operator is actually
+authorized to deploy.
+
 ---
 
 ## 1. Prerequisites
@@ -153,8 +163,9 @@ scripts/verify_config.sh
 ```
 scripts/smoke_test.sh
 # link_github (wallet + attestor co-sign) with a throwaway identity and
-# obviously-fake hashes -> submit_attestation -> read get_attestations
-# and get_reputation_score -> unlink_github to leave no dangling link.
+# obviously-fake hashes -> submit_attestation -> read
+# get_attestation_count / get_attestations_page and
+# get_reputation_score -> unlink_github to leave no dangling link.
 ```
 
 The smoke test needs a disposable, already-funded testnet identity you

@@ -1,6 +1,11 @@
 # ProofOwl canonical identifier spec v1
 
-Status: **normative** for `v1`. The reference implementation is
+Status: **normative** for `v1`, and unchanged and still fully normative
+for the v0.2 contract candidate
+(`docs/adr/0004-paginated-attestation-storage.md` changed storage and
+the read/TTL API surface; it did not touch how `github_id_hash` or
+`pr_hash` are derived). There is no `identifier-spec-v2.md` because
+nothing here needed to change. The reference implementation is
 [`sdk/typescript/src/identifiers.ts`](../../sdk/typescript/src/identifiers.ts);
 its unit tests pin every vector in this document. A change to any rule
 here is a new version (`identifier-spec-v2.md`) and a new domain/version

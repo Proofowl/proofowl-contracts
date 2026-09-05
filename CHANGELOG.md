@@ -15,6 +15,68 @@ Testnet section below); no mainnet deployment exists.
 
 ## [Unreleased]
 
+### v0.2 paginated-storage redesign — local candidate, not deployed
+- **Breaking storage/API redesign**
+  (`docs/adr/0004-paginated-attestation-storage.md`) fixing Phase 4's
+  measured hard ceiling (v0.1: 286 attestations succeed, the 287th
+  fails outright — `docs/security/resource-profile-v1.md`, kept
+  unedited). Replaces the single `Vec<Attestation>`-per-wallet entry
+  with one persistent entry per attestation
+  (`AttestationEntry(wallet, seq)`, zero-based), an `AttestationCount`
+  counter, and a running `ReputationScore` counter updated atomically.
+- **Removed**: `get_attestations(wallet) -> Vec<Attestation>`
+  (unbounded) and `bump_wallet_ttl(wallet)` (unbounded).
+- **Added**: `get_attestation_count`, `get_attestation`,
+  `get_attestations_page` (bounded reads, `MAX_PAGE_SIZE = 50`);
+  `bump_wallet_core_ttl` (O(1)), `bump_attestations_ttl_page` (bounded
+  paginated TTL sweep).
+- **New error codes** `InvalidPageLimit` (10), `PageLimitExceeded` (11),
+  `SequenceOutOfRange` (12), `PageStartOutOfRange` (13) — appended,
+  codes 1–9 unchanged.
+- **`AttestationRecorded` event** gains a `sequence: u32` field
+  (additive).
+- **Measured evidence**: `docs/security/resource-profile-v2.md` — a
+  wallet grown to 1000 attestations (3.5x the v0.1 ceiling) with no
+  failure and no entry approaching Soroban's 65,536-byte per-entry
+  limit; reads and TTL maintenance are genuinely flat regardless of
+  history size; one open item (a small, not-fully-root-caused write-cost
+  growth with total contract entry count in the local test harness) is
+  documented, not hidden.
+- **New CI/tooling gate**: `scripts/check_bounded_storage.sh` /
+  `make check-bounded-storage` (part of `make check`) — a static,
+  deterministic guard that fails if the v0.1 unbounded pattern or its
+  function names ever reappear in `src/lib.rs`.
+- **TypeScript SDK updated for v0.2**: bindings regenerated from the
+  v0.2 WASM; `client.ts` gains `getAttestationCount` / `getAttestation`
+  / `getAttestationsPage` and `MAX_PAGE_SIZE`, drops `getAttestations`;
+  `prepareBumpWalletTtl` replaced by `prepareBumpWalletCoreTtl` /
+  `prepareBumpAttestationsTtlPage`; `errors.ts` recognizes the bare
+  error-name form a `Result`-returning read call throws (new for the
+  two new Result-returning reads) in addition to the existing
+  `Error(Contract, #N)` form. The opt-in testnet integration test no
+  longer defaults to the v0.1 testnet alpha instance — it requires an
+  explicit v0.2 contract id (none exists yet) and is otherwise always
+  skipped.
+- **New/updated integration docs**: `contract-api-v2.md`,
+  `attestor-protocol-v2.md`, `event-indexer-v2.md`; v0.1 equivalents
+  marked superseded and kept as the historical record of the deployed
+  testnet alpha instance; `identifier-spec-v1.md` unchanged (hash
+  derivation did not change) with a note confirming it still applies.
+- **New**: `docs/migrations/v0.1-to-v0.2.md` — states plainly that
+  v0.1 testnet alpha data does not migrate, no mainnet state exists to
+  migrate, v0.2 needs a new contract ID when eventually deployed, and
+  v0.1 remains historical test evidence, not an integration target.
+- **`docs/security/known-risks-v1.md` R1** updated to "resolved in the
+  local v0.2 candidate, pending validation and a new testnet
+  deployment" — the original v0.1 measurement is kept, not erased.
+- Crate version bumped to `0.2.0` per `docs/RELEASE_POLICY.md`'s
+  breaking-change rule (no tag, no release cut — see that policy for
+  what a real release requires).
+- **No v0.2 instance has been deployed to any network.** This is a
+  local candidate only; deploying it requires a separate, explicit
+  approval not given as part of this change. No push, tag, release,
+  deployment, or testnet transaction occurred.
+
 ### Adversarial and security testing (Phase 4)
 - **Formal threat model**
   (`docs/security/threat-model-v1.md`) covering all 16 required threat

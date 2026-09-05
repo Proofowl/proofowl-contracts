@@ -16,27 +16,41 @@ Cross-references: `docs/security/threat-model-v1.md` (full analysis),
 
 ### R1 — Per-wallet attestation storage has a hard, unrecoverable ceiling
 
-**Severity: High** (reachable in normal, successful operation — not
-just adversarially — with no recovery path once hit).
+**Severity: was High; now Resolved in the local v0.2 candidate,
+pending validation and a new testnet deployment.**
 
-A single wallet's attestation history shares one Soroban contract-data
-entry. Measured this phase: **286 attestations succeed; the 287th fails
+Original finding (Phase 4, kept verbatim — not erased): a single
+wallet's attestation history shared one Soroban contract-data entry in
+v0.1. Measured that phase: **286 attestations succeed; the 287th fails
 outright** (entry size exceeds the 65,536-byte per-entry ceiling), for
-this contract's current `Attestation` shape and a 25-byte `repo`
-string. Past that point, `submit_attestation`, `get_attestations`,
-`get_reputation_score`, and `bump_wallet_ttl` all fail for that wallet,
-permanently, with no admin/attestor override capable of fixing it.
+that contract's `Attestation` shape and a 25-byte `repo` string. Past
+that point, `submit_attestation`, `get_attestations`,
+`get_reputation_score`, and `bump_wallet_ttl` all failed for that
+wallet, permanently, with no admin/attestor override capable of fixing
+it. Full detail: `docs/security/resource-profile-v1.md` (unedited).
 
-**Status:** documented and measured this phase
-(`docs/security/resource-profile-v1.md`); not fixed. A migration-safe
-redesign is scoped (indexed/paginated storage, one entry per
-attestation) but **not implemented** — implementing it is out of scope
-for this testing phase by design (see that document's rules of
-engagement).
+**Status:** the v0.2 local candidate
+(`docs/adr/0004-paginated-attestation-storage.md`) replaces the
+single-entry-per-wallet design with one persistent entry per
+attestation. `docs/security/resource-profile-v2.md` measured a wallet
+grown to 1000 attestations (more than 3x the v0.1 ceiling) with no
+failure and no entry approaching the size limit — the specific failure
+mode is resolved by construction (no entry's size depends on history
+length any more). "Resolved" describes the storage design and the
+tests proving it in this repository today; **it does not mean v0.2 has
+been deployed, audited, or exercised against a live network** — none of
+those things are true yet (`docs/migrations/v0.1-to-v0.2.md`).
+`resource-profile-v2.md` also flags one open item: write cost showed a
+small, not-fully-root-caused growth with total contract entry count in
+the local test harness — tracked as a follow-up, not a blocker for this
+status change (it does not reintroduce a ceiling; see that document §2
+for the honest detail).
 
-**Action required before mainnet or unbounded production scope:** ship
-the storage redesign, or enforce and document a hard per-wallet
-attestation cap well under the measured ceiling.
+**Remaining action before mainnet or unbounded production scope:**
+deploy v0.2 to testnet under separate approval and re-validate against
+a live network; complete the other mainnet blockers unrelated to
+storage (independent audit, multisig attestor, hardware-signer admin
+custody — unchanged, see `PRODUCTION_READINESS.md` Gate 6).
 
 ### R2 — Single trusted attestor key
 
@@ -202,3 +216,17 @@ separate history there.
   test suites this phase added) that the documented mitigations for R2,
   R3, R10, R11 hold under significantly more adversarial pressure than
   they had previously been tested against.
+
+## Update — v0.2 paginated-storage candidate
+
+A follow-on phase implemented the storage redesign R1 called for
+(`docs/adr/0004-paginated-attestation-storage.md`,
+`docs/security/resource-profile-v2.md`). R1's status above is updated
+to "resolved in the local v0.2 candidate, pending validation and a new
+testnet deployment" — the original measurement is kept verbatim, not
+erased, as the evidence record that justified the redesign. No other
+risk in this document changed status: R2–R11 are all still open or
+accepted exactly as stated, and v0.2 has not been deployed, audited, or
+exercised against a live network. See
+`docs/migrations/v0.1-to-v0.2.md` for the full scope of what changed
+and what did not.
