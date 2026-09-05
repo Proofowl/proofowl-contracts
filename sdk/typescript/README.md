@@ -93,7 +93,12 @@ const wallet = await client.getWalletForGithub(githubIdHash); // string | null
 ### Paginated attestation history (v0.2)
 
 ```ts
-import { createReadClient, MAX_PAGE_SIZE, parseProofOwlError, ProofOwlErrorCode } from "@proofowl/contract-sdk";
+import {
+  createReadClient,
+  MAX_PAGE_SIZE,
+  parseProofOwlError,
+  ProofOwlErrorCode,
+} from "@proofowl/contract-sdk";
 
 const client = createReadClient(config);
 

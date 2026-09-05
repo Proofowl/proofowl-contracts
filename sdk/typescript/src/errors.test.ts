@@ -74,10 +74,7 @@ test("parseProofOwlError recognises the bare name a Result-returning read call t
     parseProofOwlError(new Error("SequenceOutOfRange")),
     ProofOwlErrorCode.SequenceOutOfRange,
   );
-  assert.equal(
-    parseProofOwlError("PageStartOutOfRange"),
-    ProofOwlErrorCode.PageStartOutOfRange,
-  );
+  assert.equal(parseProofOwlError("PageStartOutOfRange"), ProofOwlErrorCode.PageStartOutOfRange);
   // The shape `Result.unwrapErr()` returns directly (an ErrorMessage
   // object), before any Error is even constructed.
   assert.equal(
