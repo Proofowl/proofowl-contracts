@@ -72,10 +72,13 @@
 //!   this wallet has, and the next `seq` to use.
 //!
 //! No single entry's size depends on history length any more, so the
-//! v0.1 ceiling cannot recur by construction. This commit-stage of the
-//! redesign keeps the v0.1 public API shape (`get_attestations`,
-//! `get_reputation_score`, `bump_wallet_ttl`) working correctly against
-//! the new storage while the bounded/paginated public API lands in
+//! v0.1 ceiling cannot recur by construction. Reads are bounded and
+//! paginated ([`ProofOwlRegistry::get_attestation_count`],
+//! [`ProofOwlRegistry::get_attestation`],
+//! [`ProofOwlRegistry::get_attestations_page`]) in place of v0.1's
+//! unbounded `get_attestations`. `get_reputation_score` and TTL
+//! maintenance still scale with history size at this stage of the
+//! redesign; a running score counter and bounded TTL maintenance land in
 //! follow-on changes (see `docs/adr/0004-paginated-attestation-storage.md`).
 
 use soroban_sdk::{
@@ -160,6 +163,17 @@ pub enum Error {
     /// `unlink_github` was called for a (wallet, github_id_hash) pair
     /// that is not an existing, consistent link.
     LinkNotFound = 9,
+    /// A paginated call's `limit` was `0`. v0.2.
+    InvalidPageLimit = 10,
+    /// A paginated call's `limit` exceeded [`MAX_PAGE_SIZE`]. v0.2.
+    PageLimitExceeded = 11,
+    /// [`ProofOwlRegistry::get_attestation`]'s `sequence` was `>=` the
+    /// wallet's attestation count. v0.2.
+    SequenceOutOfRange = 12,
+    /// A paginated call's `start` was `>` the wallet's attestation
+    /// count. `start == count` is valid (yields an empty page) — see
+    /// [`ProofOwlRegistry::get_attestations_page`]. v0.2.
+    PageStartOutOfRange = 13,
 }
 
 /// Score credited for an attestation whose complexity tier the attestor
@@ -172,6 +186,20 @@ const UNVERIFIED_COMPLEXITY_SCORE: u32 = 50;
 /// "confirmed, tier unknown" sentinel; the rest are the Stellar Wave
 /// point tiers.
 const ALLOWED_COMPLEXITY: [u32; 4] = [0, 100, 150, 200];
+
+/// The largest `limit` accepted by any paginated call
+/// (`get_attestations_page`, `bump_wallet_attestations_ttl_page`).
+///
+/// Chosen as a small, fixed bound so a page's read/write cost and
+/// response size stay flat regardless of how large a wallet's total
+/// history grows — the exact property v0.1's unbounded
+/// `get_attestations` / `bump_wallet_ttl` did not have. 50 is large
+/// enough to be a useful page for a UI or an indexer sweep and small
+/// enough that even a full page of the largest realistic `Attestation`
+/// (long `repo` string) stays a tiny fraction of any per-call resource
+/// limit — measured in `docs/security/resource-profile-v2.md`. See
+/// `docs/adr/0004-paginated-attestation-storage.md`.
+const MAX_PAGE_SIZE: u32 = 50;
 
 // --- TTL policy -------------------------------------------------------------
 //
@@ -536,15 +564,53 @@ impl ProofOwlRegistry {
         extend_instance(&env);
     }
 
-    /// Full attestation history for `wallet`, oldest first. Reads every
-    /// entry via [`Self::attestation_count`]'s backing counter; cost
-    /// grows with history size. A bounded, paginated replacement lands
-    /// in a follow-on change — see
+    /// How many attestations `wallet` has. `0` for an unknown or
+    /// never-attested wallet. Also the next `sequence`
+    /// [`Self::get_attestation`] will return once one more attestation
+    /// is submitted.
+    pub fn get_attestation_count(env: Env, wallet: Address) -> u32 {
+        attestation_count(&env, &wallet)
+    }
+
+    /// A single attestation by its zero-based `sequence` (`0` = the
+    /// first ever recorded for `wallet`). [`Error::SequenceOutOfRange`]
+    /// if `sequence >= get_attestation_count(wallet)`.
+    pub fn get_attestation(env: Env, wallet: Address, sequence: u32) -> Result<Attestation, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::AttestationEntry(wallet, sequence))
+            .ok_or(Error::SequenceOutOfRange)
+    }
+
+    /// A bounded page of `wallet`'s attestation history, oldest first,
+    /// starting at zero-based index `start`.
+    ///
+    /// `limit` must be in `1..=`[`MAX_PAGE_SIZE`]
+    /// ([`Error::InvalidPageLimit`] for `0`, [`Error::PageLimitExceeded`]
+    /// above the maximum). `start` must be `<=` the wallet's attestation
+    /// count ([`Error::PageStartOutOfRange`] otherwise) — `start` equal
+    /// to the count is valid and returns an empty page, the normal
+    /// "no more pages" signal for a caller iterating to the end.
+    ///
+    /// Replaces v0.1's unbounded `get_attestations`: this call's cost
+    /// and response size are bounded by `limit` regardless of how large
+    /// `wallet`'s total history is — see
     /// `docs/adr/0004-paginated-attestation-storage.md`.
-    pub fn get_attestations(env: Env, wallet: Address) -> Vec<Attestation> {
+    pub fn get_attestations_page(
+        env: Env,
+        wallet: Address,
+        start: u32,
+        limit: u32,
+    ) -> Result<Vec<Attestation>, Error> {
+        Self::check_page_limit(limit)?;
         let count = attestation_count(&env, &wallet);
+        if start > count {
+            return Err(Error::PageStartOutOfRange);
+        }
+
+        let end = start.saturating_add(limit).min(count);
         let mut out = Vec::new(&env);
-        for seq in 0..count {
+        for seq in start..end {
             if let Some(entry) = env
                 .storage()
                 .persistent()
@@ -553,7 +619,7 @@ impl ProofOwlRegistry {
                 out.push_back(entry);
             }
         }
-        out
+        Ok(out)
     }
 
     /// Sum of complexity points across all attestations for a wallet.
@@ -612,6 +678,17 @@ impl ProofOwlRegistry {
             .ok_or(Error::NotInitialized)?;
         if caller != &stored {
             return Err(Error::Unauthorized);
+        }
+        Ok(())
+    }
+
+    /// Shared bound check for every paginated call's `limit`.
+    fn check_page_limit(limit: u32) -> Result<(), Error> {
+        if limit == 0 {
+            return Err(Error::InvalidPageLimit);
+        }
+        if limit > MAX_PAGE_SIZE {
+            return Err(Error::PageLimitExceeded);
         }
         Ok(())
     }
