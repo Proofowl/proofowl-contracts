@@ -4,6 +4,16 @@ This document is the single place that spells out the trust model, the
 things the contract deliberately does **not** do, the storage-lifetime
 policy, and the known MVP limitations. Read it with `src/lib.rs` open.
 
+**Phase 4 adversarial and security testing** (2026-09) produced a
+formal threat model, a resource/scalability profile with a measured
+hard storage ceiling, and a consolidated security-review package. Start
+there for anything beyond this document's design-level summary:
+
+- [`docs/security/threat-model-v1.md`](docs/security/threat-model-v1.md) — attacker capabilities, assets, mitigations, residual risk, severity, per threat category.
+- [`docs/security/resource-profile-v1.md`](docs/security/resource-profile-v1.md) — measured cost growth and the exact per-wallet history ceiling (286 attestations succeed, the 287th fails outright).
+- [`docs/security/security-review-checklist-v1.md`](docs/security/security-review-checklist-v1.md) — line-item review checklist, severity rubric, release-blocker definition, audit handoff checklist.
+- [`docs/security/known-risks-v1.md`](docs/security/known-risks-v1.md) — the honest, ranked list of open risks and accepted limitations.
+
 ## Reporting a vulnerability
 
 **Do not open a public issue or pull request for a security problem.**
@@ -251,18 +261,24 @@ TTL.
 
 ## 7. Known MVP limitations
 
-- **Attestation storage does not scale.** Each wallet's attestations are
-  a single `Vec<Attestation>` under `Attestations(wallet)`.
-  `get_attestations`, `get_reputation_score`, and `bump_wallet_ttl` load
-  and iterate the whole vector; every `submit_attestation` deserialises,
-  appends, and re-serialises it. This is acceptable for the tens-of-
-  entries-per-contributor volume expected in the MVP, but a
-  production-scale design needs paginated / indexed storage — e.g. one
-  persistent entry per attestation keyed by `(wallet, seq)`, a
-  `count`, and a running `score` counter so reads and keep-alives are
-  O(1) / O(page). Deferred deliberately: it is a storage-layout change
-  with a migration, not a security fix, and doing it now would enlarge
-  the review surface of this correction pass.
+- **Attestation storage does not scale, and now has a measured hard
+  ceiling.** Each wallet's attestations are a single `Vec<Attestation>`
+  under `Attestations(wallet)`. `get_attestations`,
+  `get_reputation_score`, and `bump_wallet_ttl` load and iterate the
+  whole vector; every `submit_attestation` deserialises, appends, and
+  re-serialises it. Phase 4's `tests/resource_profile.rs` measured
+  exactly where this stops working: **286 attestations succeed for one
+  wallet; the 287th `submit_attestation` call fails outright** (the
+  entry exceeds Soroban's 65,536-byte per-contract-data-entry ceiling),
+  after which that wallet can never receive another attestation or TTL
+  refresh, with no recovery path. See
+  [`docs/security/resource-profile-v1.md`](docs/security/resource-profile-v1.md)
+  for the full measurement, verdict, and a scoped (not implemented)
+  redesign proposal — one persistent entry per attestation keyed by
+  `(wallet, seq)`, a `count`, and a running `score` counter, so reads
+  and keep-alives are O(1) / O(page). Deferred deliberately: it is a
+  storage-layout change, not a security fix to apply reactively, and
+  Phase 4's mandate was to measure and document, not redesign.
 - **Lost-wallet-key recovery is deferred** (§4.2).
 - **Cross-wallet history migration is deferred** (§4.2).
 - **Single trusted attestor** (§1.2) — rotation to a multisig/threshold

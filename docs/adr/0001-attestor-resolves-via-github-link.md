@@ -28,6 +28,13 @@ the call fails with `WalletNotLinked`.
   facts in its own queue until linking happens, then submit — not to
   work around this by inventing a placeholder wallet.
 
+## See also
+
+`docs/security/threat-model-v1.md` §3 ("compromised or malicious
+attestor") formalizes exactly what this ADR's guarantee does and does
+not cover, with severity and test evidence
+(`tests/security_matrix.rs`, `tests/state_machine.rs`).
+
 ## Update (see ADR 0002)
 This ADR originally described the `GithubLink` mapping as created by "the
 contributor's own signed transaction, never the attestor's say-so". As of

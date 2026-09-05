@@ -109,10 +109,17 @@ and constants are in
 
 A wallet's attestations live in one `Vec<Attestation>` under a single
 key. Reads, `bump_wallet_ttl`, and each new `submit_attestation` load or
-rewrite the whole vector, so cost grows with a contributor's history.
-Fine for MVP volumes; production scale needs paginated / indexed storage
-(one entry per attestation + a running score counter). Deliberately
-deferred — see [`SECURITY.md`](./SECURITY.md#7-known-mvp-limitations).
+rewrite the whole vector, so cost grows with a contributor's history —
+and it has a measured hard ceiling: **286 attestations succeed for one
+wallet, the 287th fails outright** (the entry exceeds Soroban's
+per-contract-data-entry size limit), after which that wallet can never
+receive another attestation or TTL refresh. Fine for MVP volumes;
+production scale needs paginated / indexed storage (one entry per
+attestation + a running score counter) before a contributor could
+realistically reach that ceiling. Deliberately deferred — see
+[`SECURITY.md`](./SECURITY.md#7-known-mvp-limitations) and
+[`docs/security/resource-profile-v1.md`](./docs/security/resource-profile-v1.md)
+for the full measurement and verdict.
 
 ## Quick start
 
@@ -236,6 +243,7 @@ fit together and which ones exist today.
 | Maintainer routine tasks | [`docs/MAINTAINERS.md`](./docs/MAINTAINERS.md) |
 | Trust model & vulnerability reporting | [`SECURITY.md`](./SECURITY.md) |
 | Architecture decisions | [`docs/adr/`](./docs/adr) |
+| Threat model, resource profile, security review checklist, known risks | [`docs/security/`](./docs/security/) |
 
 Nothing has been released to a registry, tagged, or audited. One
 disposable instance is deployed to **testnet** (see *Deployed contracts*

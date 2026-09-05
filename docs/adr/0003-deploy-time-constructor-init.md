@@ -59,6 +59,13 @@ passes these as constructor arguments; there is no follow-up call.
   and no longer run a second `init` invoke. README, SECURITY.md, and the
   deployment checklist are updated.
 
+## See also
+
+`docs/security/threat-model-v1.md` §10 ("front-running / transaction
+ordering") restates this ADR's no-initialization-race guarantee in
+threat-model form, next to the other ordering-dependent properties this
+contract makes.
+
 ## Alternatives considered
 - **Keep `init`, add a deployer check** (`env.deployer()` / source
   account binding). Soroban does not expose the deploying account to a

@@ -7,6 +7,13 @@ under it is met. Nothing here is aspirational marketing — if it says
 
 Legend: `MET` · `PARTIAL` · `NOT MET` · `N/A`
 
+Security-specific evidence backing Gates 5 and 6 lives under
+[`docs/security/`](docs/security/) — see
+[`threat-model-v1.md`](docs/security/threat-model-v1.md),
+[`resource-profile-v1.md`](docs/security/resource-profile-v1.md),
+[`security-review-checklist-v1.md`](docs/security/security-review-checklist-v1.md),
+and [`known-risks-v1.md`](docs/security/known-risks-v1.md).
+
 ---
 
 ## Gate 1 — Local validation
@@ -86,12 +93,14 @@ and its consumables exist today.
 | 5.2 | ADRs for each significant security decision | MET (`docs/adr/0001–0003`) |
 | 5.3 | Tests cover each auth path and each failure mode | MET (`src/test.rs`, `tests/constructor_auth.rs`) |
 | 5.4 | Private vulnerability-reporting process published | PARTIAL — process described in `SECURITY.md`; the security contact is a placeholder a maintainer must fill in |
-| 5.5 | Internal security review / threat-model walkthrough recorded | NOT MET |
-| 5.6 | Independent third-party audit | NOT MET — no audit has been performed or scheduled |
+| 5.5 | Internal security review / threat-model walkthrough recorded | **MET** — Phase 4 (2026-09): `docs/security/threat-model-v1.md`, `docs/security/security-review-checklist-v1.md`, `docs/security/known-risks-v1.md`, plus adversarial/state-machine/TTL/boundary/resource test suites (`tests/security_matrix.rs`, `tests/state_machine.rs`, `tests/ttl_replay.rs`, `tests/boundary_and_events.rs`, `tests/resource_profile.rs`) |
+| 5.6 | Independent third-party audit | NOT MET — no audit has been performed or scheduled. Internal review (5.5) is not a substitute — see `docs/security/security-review-checklist-v1.md` §7 |
 | 5.7 | Bug bounty | NOT MET — none exists; do not claim one |
 
-**Gate 5: NO-GO for anything beyond testnet** — documentation and tests
-are solid; no internal or external review has been done.
+**Gate 5: NO-GO for anything beyond testnet** — an internal
+threat-model review and adversarial test pass are now done (5.5); no
+external review has been done (5.6), which remains a hard mainnet
+prerequisite (Gate 6.2).
 
 ---
 
@@ -106,7 +115,7 @@ Every item below is a hard prerequisite. All are currently **NOT MET**.
 | 6.3 | Attestor is a multisig / threshold scheme, not a single key (`set_attestor` path exercised) | NOT MET |
 | 6.4 | Admin key in a hardware signer with a documented custody policy | NOT MET |
 | 6.5 | Testnet instance run for a sustained period with real backend + indexer traffic | NOT MET |
-| 6.6 | Per-wallet attestation storage scaling addressed or bounded (`SECURITY.md` §7) | NOT MET |
+| 6.6 | Per-wallet attestation storage scaling addressed or bounded (`SECURITY.md` §7) | NOT MET — now measured precisely: 286 attestations succeed, the 287th fails outright (`docs/security/resource-profile-v1.md`). Verdict: requires the paginated-storage redesign that document scopes, or an enforced per-wallet cap, before mainnet or unbounded production scope |
 | 6.7 | Incident-response runbook and on-call owner | NOT MET |
 | 6.8 | Immutability accepted in writing by the project owner (no upgrade path exists) | NOT MET |
 
@@ -122,10 +131,14 @@ Every item below is a hard prerequisite. All are currently **NOT MET**.
 | 2 CI | **GO** with follow-ups (SHA-pin actions; keep supply-chain green) |
 | 3 Testnet deployment | **GO** (disposable alpha deployed, verified, smoke-tested — 2026-09-01) |
 | 4 E2E integration | **NO-GO** (integration contract + SDK exist; backend / indexer / frontend do not) |
-| 5 Security review | **NO-GO** (no internal or external review) |
-| 6 Mainnet | **NO-GO** (out of scope) |
+| 5 Security review | **NO-GO** (internal threat-model + adversarial testing done, Phase 4 2026-09; external audit still not done) |
+| 6 Mainnet | **NO-GO** (out of scope; storage ceiling now measured at 286/287 attestations, see `docs/security/resource-profile-v1.md`) |
 
 The honest one-line status: **the contract runs correctly on Stellar
-testnet (one disposable alpha instance, deployed and smoke-tested).
-Nothing beyond that is ready — no backend/indexer/frontend, no security
+testnet (one disposable alpha instance, deployed and smoke-tested), and
+has now been through an internal adversarial security-testing pass
+(Phase 4, 2026-09) covering authorization, state-machine invariants,
+TTL/replay resistance, boundary conditions, SDK cross-verification, and
+a measured resource/scalability profile — see `docs/security/`.
+Nothing beyond that is ready — no backend/indexer/frontend, no external security
 review, no audit, no mainnet.**

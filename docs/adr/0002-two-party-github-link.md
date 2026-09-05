@@ -61,6 +61,13 @@ markers untouched.
   `SECURITY.md §4.2` — an attestor-only override was rejected because it
   would reintroduce exactly the redirect capability this ADR removes.
 
+## See also
+
+`docs/security/threat-model-v1.md` §2 ("GitHub identity-squatting
+attempts") and §10 ("front-running / transaction ordering") formalize
+this decision's guarantees under adversarial pressure, including
+racing-order permutations exercised in `tests/state_machine.rs`.
+
 ## Alternatives considered
 - **Propose/confirm in two transactions** (wallet proposes, attestor
   confirms later). Rejected for the MVP: it needs a pending-request
