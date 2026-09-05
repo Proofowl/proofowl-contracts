@@ -1,6 +1,6 @@
 /**
  * Read-only client and transaction-preparation helpers for the ProofOwl
- * contract.
+ * contract — v0.2 (paginated attestation storage).
  *
  * Design constraints (enforced here, not just documented):
  *  - The read client is constructed with NO `publicKey` and NO signer,
@@ -12,7 +12,19 @@
  *    still sign an auth entry, and refuses to pretend one signature is
  *    enough.
  *
- * See `docs/integration/contract-api-v1.md`.
+ * v0.2 breaking change from v0.1: `getAttestations` (unbounded, one
+ * call returning a wallet's entire history) and `prepareBumpWalletTtl`
+ * (unbounded TTL refresh) no longer exist — the underlying contract
+ * functions were removed because they had no ceiling on cost or
+ * response size (see `docs/adr/0004-paginated-attestation-storage.md`,
+ * `docs/security/resource-profile-v1.md`). Use
+ * {@link ProofOwlReadClient.getAttestationCount},
+ * {@link ProofOwlReadClient.getAttestation},
+ * {@link ProofOwlReadClient.getAttestationsPage},
+ * {@link prepareBumpWalletCoreTtl}, and
+ * {@link prepareBumpAttestationsTtlPage} instead.
+ *
+ * See `docs/integration/contract-api-v2.md`.
  */
 
 import type { AssembledTransaction } from "@stellar/stellar-sdk/contract";
@@ -21,6 +33,19 @@ import {
   type Attestation as GeneratedAttestation,
 } from "./generated/index.js";
 import { assertConfig, type ProofOwlContractConfig } from "./config.js";
+
+/**
+ * The largest `limit` the contract accepts for `get_attestations_page`
+ * / `bump_attestations_ttl_page` (`Error.PageLimitExceeded` above this).
+ * Mirrored from `src/lib.rs::MAX_PAGE_SIZE` — the contract is
+ * authoritative; this constant exists so a caller can validate locally
+ * before spending a round-trip on a call the contract will reject, and
+ * so a UI can size its pagination controls sensibly. If the contract's
+ * value ever changes, this constant must be updated to match (there is
+ * no way to read it on-chain; `contract-api-v2.md` documents it as part
+ * of the versioned ABI).
+ */
+export const MAX_PAGE_SIZE = 50;
 
 /** A single attestation, normalised for JS consumers. */
 export interface AttestationView {
@@ -38,13 +63,22 @@ export interface AttestationView {
   prHashHex: string;
   /** Ledger close time (Unix seconds) the contract recorded. */
   timestamp: bigint;
+  /**
+   * Zero-based index of this attestation in its wallet's history — the
+   * same value `get_attestation` addresses it by and
+   * `AttestationRecorded`'s `sequence` field carries (v0.2). Computed
+   * client-side (`get_attestation`'s own `sequence` argument, or
+   * `page.start + index` for a page result); not a separate on-chain
+   * field of `Attestation` itself.
+   */
+  sequence: number;
 }
 
 function toHex(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("hex");
 }
 
-function viewAttestation(a: GeneratedAttestation): AttestationView {
+function viewAttestation(a: GeneratedAttestation, sequence: number): AttestationView {
   const prHash = new Uint8Array(a.pr_hash);
   return {
     repo: a.repo,
@@ -54,6 +88,7 @@ function viewAttestation(a: GeneratedAttestation): AttestationView {
     prHash,
     prHashHex: toHex(prHash),
     timestamp: BigInt(a.timestamp),
+    sequence,
   };
 }
 
@@ -69,6 +104,26 @@ function readOnlyGeneratedClient(config: ProofOwlContractConfig): GeneratedClien
   });
 }
 
+function assertPageArgs(start: number, limit: number): void {
+  if (!Number.isInteger(start) || start < 0) {
+    throw new RangeError("start must be a non-negative integer");
+  }
+  if (!Number.isInteger(limit) || limit < 1) {
+    // Mirrors the contract's Error.InvalidPageLimit -- checked
+    // client-side so an obviously-bad call never spends a round-trip.
+    throw new RangeError("limit must be a positive integer (contract: Error.InvalidPageLimit)");
+  }
+  if (limit > MAX_PAGE_SIZE) {
+    // Mirrors Error.PageLimitExceeded. The contract remains
+    // authoritative for the actual value -- this is a local mirror
+    // (see the MAX_PAGE_SIZE doc comment) to fail fast, not a
+    // substitute for the on-chain check.
+    throw new RangeError(
+      `limit must be <= MAX_PAGE_SIZE (${MAX_PAGE_SIZE}) (contract: Error.PageLimitExceeded)`,
+    );
+  }
+}
+
 export interface ProofOwlReadClient {
   /** Current admin, or `null` if the instance is uninitialised/archived. */
   getAdmin(): Promise<string | null>;
@@ -78,9 +133,31 @@ export interface ProofOwlReadClient {
   getWalletForGithub(githubIdHash: Uint8Array): Promise<string | null>;
   /** `github_id_hash` linked to `wallet` (32 bytes), or `null`. */
   getGithubForWallet(wallet: string): Promise<Uint8Array | null>;
-  /** Full attestation history for `wallet`, oldest first. */
-  getAttestations(wallet: string): Promise<AttestationView[]>;
-  /** Summed reputation score for `wallet`. */
+  /**
+   * How many attestations `wallet` has. `0` for an unknown or
+   * never-attested wallet.
+   */
+  getAttestationCount(wallet: string): Promise<number>;
+  /**
+   * A single attestation by its zero-based `sequence`. Throws (rejects)
+   * with an error `parseProofOwlError` recognises as
+   * `SequenceOutOfRange` if `sequence >= getAttestationCount(wallet)`.
+   */
+  getAttestation(wallet: string, sequence: number): Promise<AttestationView>;
+  /**
+   * A bounded page of `wallet`'s attestation history, oldest first,
+   * starting at zero-based index `start`. `limit` must be in
+   * `1..=MAX_PAGE_SIZE`; validated client-side (throws a `RangeError`
+   * before any round-trip) as well as on-chain. `start` beyond the
+   * wallet's count throws an error `parseProofOwlError` recognises as
+   * `PageStartOutOfRange` -- except `start` exactly equal to the count,
+   * which is valid and resolves to `[]` (the "no more pages" signal for
+   * a caller iterating to the end).
+   *
+   * Replaces v0.1's unbounded `getAttestations`.
+   */
+  getAttestationsPage(wallet: string, start: number, limit: number): Promise<AttestationView[]>;
+  /** Summed reputation score for `wallet`. O(1) on-chain (v0.2). */
   getReputationScore(wallet: string): Promise<number>;
   /** Escape hatch: the raw generated client (still read-only). */
   readonly raw: GeneratedClient;
@@ -111,9 +188,20 @@ export function createReadClient(config: ProofOwlContractConfig): ProofOwlReadCl
       const r = (await raw.get_github_for_wallet({ wallet })).result;
       return r ? new Uint8Array(r) : null;
     },
-    async getAttestations(wallet: string) {
-      const list = (await raw.get_attestations({ wallet })).result;
-      return list.map(viewAttestation);
+    async getAttestationCount(wallet: string) {
+      return (await raw.get_attestation_count({ wallet })).result;
+    },
+    async getAttestation(wallet: string, sequence: number) {
+      if (!Number.isInteger(sequence) || sequence < 0) {
+        throw new RangeError("sequence must be a non-negative integer");
+      }
+      const attestation = (await raw.get_attestation({ wallet, sequence })).result.unwrap();
+      return viewAttestation(attestation, sequence);
+    },
+    async getAttestationsPage(wallet: string, start: number, limit: number) {
+      assertPageArgs(start, limit);
+      const list = (await raw.get_attestations_page({ wallet, start, limit })).result.unwrap();
+      return list.map((a, i) => viewAttestation(a, start + i));
     },
     async getReputationScore(wallet: string) {
       return (await raw.get_reputation_score({ wallet })).result;
@@ -279,11 +367,16 @@ export function prepareSubmitAttestation(
 }
 
 /**
- * Prepare an UNSIGNED `bump_wallet_ttl` transaction. Permissionless:
+ * Prepare an UNSIGNED `bump_wallet_core_ttl` transaction. Permissionless:
  * only the `caller` (transaction source) signs; the wallet owner does
- * not. Changes no data.
+ * not. Changes no data. O(1): refreshes the wallet link, the GitHub
+ * link, the attestation counter, and the reputation score -- NOT
+ * individual attestation entries or their `SeenPr` markers, which need
+ * {@link prepareBumpAttestationsTtlPage} swept across the whole
+ * history. Replaces v0.1's unbounded `prepareBumpWalletTtl` (removed --
+ * see the module doc comment).
  */
-export function prepareBumpWalletTtl(
+export function prepareBumpWalletCoreTtl(
   config: ProofOwlContractConfig,
   caller: string,
   wallet: string,
@@ -298,7 +391,43 @@ export function prepareBumpWalletTtl(
     allowHttp: config.allowHttp ?? false,
     publicKey: caller,
   });
-  return client.bump_wallet_ttl({ wallet });
+  return client.bump_wallet_core_ttl({ wallet });
+}
+
+/**
+ * Prepare an UNSIGNED `bump_attestations_ttl_page` transaction.
+ * Permissionless; changes no data. Refreshes the TTL of one page of
+ * `wallet`'s attestation entries (`[start, start+limit)`) and the
+ * `SeenPr` marker each references. A full-history keep-alive sweep
+ * calls this repeatedly with an advancing `start` until the on-chain
+ * return value (the count actually refreshed) is less than `limit` --
+ * see `docs/integration/event-indexer-v2.md` §6 for the exact scheduling
+ * responsibility this places on a backend/indexer.
+ *
+ * `limit`/`start` are validated client-side the same way as
+ * {@link ProofOwlReadClient.getAttestationsPage} (throws before any
+ * round-trip on an obviously-bad value); the contract remains
+ * authoritative for `PageStartOutOfRange`.
+ */
+export function prepareBumpAttestationsTtlPage(
+  config: ProofOwlContractConfig,
+  caller: string,
+  wallet: string,
+  start: number,
+  limit: number,
+): Promise<AssembledTransaction<unknown>> {
+  assertConfig(config);
+  assertGAddress(caller, "caller");
+  assertGAddress(wallet, "wallet");
+  assertPageArgs(start, limit);
+  const client = new GeneratedClient({
+    contractId: config.contractId,
+    rpcUrl: config.rpcUrl,
+    networkPassphrase: config.networkPassphrase,
+    allowHttp: config.allowHttp ?? false,
+    publicKey: caller,
+  });
+  return client.bump_attestations_ttl_page({ wallet, start, limit });
 }
 
 /**

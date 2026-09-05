@@ -1,50 +1,72 @@
 /**
- * READ-ONLY integration check against the public Phase 2 testnet alpha
- * instance. It calls only view methods (`get_admin`, `get_attestor`,
- * `get_reputation_score` for an address expected to have no history) and
- * NEVER signs or submits anything.
+ * READ-ONLY integration check against a live **v0.2** contract
+ * instance. Never signs or submits anything even when it runs.
  *
- * Skipped unless `PROOFOWL_INTEGRATION=1` is set, so the default
- * `npm test` stays fully offline. Run it with `npm run test:integration`
- * (or `make sdk-integration-testnet`).
+ * v0.2 changed the ABI (`docs/adr/0004-paginated-attestation-storage.md`):
+ * `get_attestations` and `bump_wallet_ttl` no longer exist in this
+ * client. As of this SDK version **no v0.2 instance has been deployed
+ * to any network** (`docs/migrations/v0.1-to-v0.2.md`) — deploying one
+ * requires a separate, explicit approval this phase's rules do not
+ * grant. The v0.1 testnet alpha instance still exists but does not
+ * speak this v0.2 client's ABI, so this file deliberately does NOT
+ * hardcode `TESTNET_ALPHA_EXAMPLE` (or any other contract id) the way
+ * the v0.1 version of this file did.
+ *
+ * Skipped unless BOTH `PROOFOWL_INTEGRATION=1` and
+ * `PROOFOWL_V2_CONTRACT_ID` are set — i.e. always skipped today, since
+ * no v0.2 contract id exists to supply. Once a v0.2 instance is
+ * deployed under its own approval, point this at it with:
+ *
+ *   PROOFOWL_INTEGRATION=1 PROOFOWL_V2_CONTRACT_ID=C... \
+ *     [PROOFOWL_V2_RPC_URL=...] [PROOFOWL_V2_NETWORK_PASSPHRASE=...] \
+ *     npm run test:integration
  */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { createReadClient } from "./client.js";
-import { TESTNET_ALPHA_EXAMPLE } from "./config.js";
+import type { ProofOwlContractConfig } from "./config.js";
 
-const ENABLED = process.env.PROOFOWL_INTEGRATION === "1";
+const V2_CONTRACT_ID = process.env.PROOFOWL_V2_CONTRACT_ID;
+const ENABLED = process.env.PROOFOWL_INTEGRATION === "1" && !!V2_CONTRACT_ID;
+const SKIP_REASON =
+  "set PROOFOWL_INTEGRATION=1 and PROOFOWL_V2_CONTRACT_ID=C... to run " +
+  "(no v0.2 instance is deployed to any network yet -- see docs/migrations/v0.1-to-v0.2.md)";
 
-// Public Phase 2 testnet alpha values (docs/testnet/phase2-alpha.md).
-const EXPECTED_ADMIN = "GDHGAVUNEGGKBL5Z6PIDK3KXQO42J7SHFIHYYT22W5YCV5UQ6DQV5CY6";
-const EXPECTED_ATTESTOR = "GD4AV554CBCMUXSVKSJG35J6OHJMCYAP56VZEBVBC5YFYPMB7ZSNC3VW";
+function configFromEnv(): ProofOwlContractConfig {
+  return {
+    contractId: V2_CONTRACT_ID as string,
+    rpcUrl: process.env.PROOFOWL_V2_RPC_URL ?? "https://soroban-testnet.stellar.org",
+    networkPassphrase:
+      process.env.PROOFOWL_V2_NETWORK_PASSPHRASE ?? "Test SDF Network ; September 2015",
+  };
+}
 
 test(
-  "testnet alpha: get_admin / get_attestor match the documented addresses",
-  { skip: ENABLED ? false : "set PROOFOWL_INTEGRATION=1 to run" },
+  "v0.2 instance: get_admin / get_attestor resolve to non-null addresses",
+  { skip: ENABLED ? false : SKIP_REASON },
   async () => {
-    const client = createReadClient(TESTNET_ALPHA_EXAMPLE);
+    const client = createReadClient(configFromEnv());
     const [admin, attestor] = await Promise.all([client.getAdmin(), client.getAttestor()]);
-    assert.equal(admin, EXPECTED_ADMIN, "on-chain admin");
-    assert.equal(attestor, EXPECTED_ATTESTOR, "on-chain attestor");
+    assert.equal(typeof admin, "string", "instance must be initialized");
+    assert.equal(typeof attestor, "string", "instance must be initialized");
   },
 );
 
 test(
-  "testnet alpha: a fresh address has an empty history and zero score",
-  { skip: ENABLED ? false : "set PROOFOWL_INTEGRATION=1 to run" },
+  "v0.2 instance: a fresh, never-used address has zero attestations and zero score",
+  { skip: ENABLED ? false : SKIP_REASON },
   async () => {
-    const client = createReadClient(TESTNET_ALPHA_EXAMPLE);
+    const client = createReadClient(configFromEnv());
     // The all-zero ed25519 public key: a deterministic, valid strkey
     // that has never interacted with the contract.
     const nobody = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
-    const [history, score] = await Promise.all([
-      client.getAttestations(nobody),
+    const [count, score] = await Promise.all([
+      client.getAttestationCount(nobody),
       client.getReputationScore(nobody),
     ]);
-    assert.deepEqual(history, []);
+    assert.equal(count, 0);
     assert.equal(score, 0);
   },
 );

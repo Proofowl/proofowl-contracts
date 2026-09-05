@@ -2,8 +2,10 @@
  * Typed view of the contract's `#[contracterror]` enum, plus helpers to
  * recognise a ProofOwl contract error thrown by the generated client.
  *
- * See `docs/integration/contract-api-v1.md#errors`. The codes are part
- * of the ABI and are authoritative in the WASM.
+ * See `docs/integration/contract-api-v2.md#errors`. The codes are part
+ * of the ABI and are authoritative in the WASM. Codes 1-9 are v0.1,
+ * unchanged; 10-13 are v0.2 additions, appended not renumbered
+ * (`docs/adr/0004-paginated-attestation-storage.md`).
  */
 
 import { Errors as GeneratedErrors } from "./generated/index.js";
@@ -30,6 +32,14 @@ export enum ProofOwlErrorCode {
   InvalidComplexity = 8,
   /** unlink_github target is not a consistent existing link. */
   LinkNotFound = 9,
+  /** A paginated call's `limit` was `0`. v0.2. */
+  InvalidPageLimit = 10,
+  /** A paginated call's `limit` exceeded `MAX_PAGE_SIZE`. v0.2. */
+  PageLimitExceeded = 11,
+  /** `get_attestation`'s `sequence` was `>=` the wallet's attestation count. v0.2. */
+  SequenceOutOfRange = 12,
+  /** A paginated call's `start` was `>` the wallet's attestation count. v0.2. */
+  PageStartOutOfRange = 13,
 }
 
 export const PROOFOWL_ERROR_NAME: Readonly<Record<ProofOwlErrorCode, string>> = Object.freeze({
@@ -42,9 +52,44 @@ export const PROOFOWL_ERROR_NAME: Readonly<Record<ProofOwlErrorCode, string>> = 
   [ProofOwlErrorCode.WalletNotLinked]: "WalletNotLinked",
   [ProofOwlErrorCode.InvalidComplexity]: "InvalidComplexity",
   [ProofOwlErrorCode.LinkNotFound]: "LinkNotFound",
+  // v0.2 additions -- appended, not renumbered (docs/adr/0004-paginated-attestation-storage.md).
+  [ProofOwlErrorCode.InvalidPageLimit]: "InvalidPageLimit",
+  [ProofOwlErrorCode.PageLimitExceeded]: "PageLimitExceeded",
+  [ProofOwlErrorCode.SequenceOutOfRange]: "SequenceOutOfRange",
+  [ProofOwlErrorCode.PageStartOutOfRange]: "PageStartOutOfRange",
 });
 
+/**
+ * Reverse lookup, name -> code. Needed because of how
+ * `@stellar/stellar-sdk/contract`'s `Result<T, Error>` wrapper surfaces
+ * a contract-level `Err` for a READ (simulated, not submitted) call:
+ * `AssembledTransaction.result` for such a call resolves to a
+ * `rust_result.Ok` / `rust_result.Err` object directly (the Result is
+ * decoded from the successful simulation's return value, not thrown as
+ * a host error), and `Err.unwrap()` throws a plain `Error` whose
+ * `.message` is exactly the bare variant name (e.g.
+ * `"SequenceOutOfRange"`) from the ABI's `Errors` map -- NOT the
+ * `Error(Contract, #N)` string a submitted, rejected mutating
+ * transaction's host error carries. `get_attestation` and
+ * `get_attestations_page` (v0.2) are the first read-only calls in this
+ * SDK that return a `Result`, so this case did not previously arise.
+ */
+const NAME_TO_CODE: ReadonlyMap<string, ProofOwlErrorCode> = new Map(
+  Object.entries(PROOFOWL_ERROR_NAME).map(([code, name]) => [
+    name,
+    Number(code) as ProofOwlErrorCode,
+  ]),
+);
+
 const CONTRACT_ERR_RE = /Error\(Contract,\s*#(\d+)\)/;
+
+/** Try the `Error(Contract, #N)` pattern first, then a bare error name. */
+function extractCodeFromString(s: string): number | undefined {
+  const match = CONTRACT_ERR_RE.exec(s);
+  if (match) return Number(match[1]);
+  const code = NAME_TO_CODE.get(s.trim());
+  return code;
+}
 
 /**
  * Best-effort extraction of a ProofOwl contract error code from anything
@@ -52,8 +97,14 @@ const CONTRACT_ERR_RE = /Error\(Contract,\s*#(\d+)\)/;
  *
  * Recognises:
  *  - a plain number that is a valid code;
- *  - `{ message: "...Error(Contract, #N)..." }` shapes;
- *  - an Error whose message contains `Error(Contract, #N)`;
+ *  - `{ message: "...Error(Contract, #N)..." }` shapes (a submitted,
+ *    rejected mutating call's host error);
+ *  - `{ message: "SequenceOutOfRange" }` (or any other bare error
+ *    name) shapes -- what a Result-returning READ call's
+ *    `.result.unwrap()` throws (v0.2: `get_attestation`,
+ *    `get_attestations_page`), since that Result is decoded straight
+ *    from a successful simulation, not surfaced as a host error string;
+ *  - an Error whose message contains either of the above;
  *  - a Rust-`Result` failure object exposing `.error` / `.value`.
  *
  * Returns `undefined` if it is not a recognised ProofOwl contract error
@@ -69,8 +120,7 @@ function extractCode(input: unknown): number | undefined {
   if (typeof input === "number" && Number.isInteger(input)) return input;
 
   if (typeof input === "string") {
-    const m = CONTRACT_ERR_RE.exec(input);
-    return m ? Number(m[1]) : undefined;
+    return extractCodeFromString(input);
   }
 
   if (input && typeof input === "object") {
@@ -81,12 +131,12 @@ function extractCode(input: unknown): number | undefined {
       if (nested !== undefined) return nested;
     }
     if (typeof obj.message === "string") {
-      const m = CONTRACT_ERR_RE.exec(obj.message);
-      if (m) return Number(m[1]);
+      const code = extractCodeFromString(obj.message);
+      if (code !== undefined) return code;
     }
     if (input instanceof Error) {
-      const m = CONTRACT_ERR_RE.exec(input.message);
-      if (m) return Number(m[1]);
+      const code = extractCodeFromString(input.message);
+      if (code !== undefined) return code;
     }
   }
   return undefined;

@@ -1,8 +1,22 @@
 # @proofowl/contract-sdk
 
 Typed, read-only client and canonical identifier helpers for the
-ProofOwl Soroban contract. Written for the future `proofowl-backend` and
-`proofowl-frontend` repositories (neither exists yet).
+ProofOwl Soroban contract — **v0.2** (paginated attestation storage).
+Written for the future `proofowl-backend` and `proofowl-frontend`
+repositories (neither exists yet).
+
+**v0.2 breaking change from v0.1:** `getAttestations` (unbounded — one
+call returning a wallet's entire history) and `prepareBumpWalletTtl`
+(unbounded TTL refresh) are removed; the contract functions they
+wrapped no longer exist, because they had no ceiling on cost or
+response size (`docs/adr/0004-paginated-attestation-storage.md`,
+`docs/security/resource-profile-v1.md`). Use `getAttestationCount` /
+`getAttestation` / `getAttestationsPage`, and
+`prepareBumpWalletCoreTtl` / `prepareBumpAttestationsTtlPage`, instead.
+This SDK targets **v0.2 only** — see
+[`../../docs/migrations/v0.1-to-v0.2.md`](../../docs/migrations/v0.1-to-v0.2.md).
+No v0.2 contract has been deployed to any network as of this SDK
+version; there is no testnet/mainnet contract ID to configure yet.
 
 **What this SDK does NOT do:** it never signs a transaction, never
 submits one, and never touches a local keystore. Mutating calls are
@@ -10,7 +24,7 @@ returned as **unsigned** `AssembledTransaction`s for the caller to sign
 and submit with its own signer.
 
 The deployed contract WASM / ABI is authoritative. See
-[`../../docs/integration/contract-api-v1.md`](../../docs/integration/contract-api-v1.md).
+[`../../docs/integration/contract-api-v2.md`](../../docs/integration/contract-api-v2.md).
 
 ## Layout
 
@@ -62,18 +76,61 @@ differs.
 ### Read-only lookup
 
 ```ts
-import { createReadClient, TESTNET_ALPHA_EXAMPLE } from "@proofowl/contract-sdk";
+import { createReadClient } from "@proofowl/contract-sdk";
 
-// TESTNET_ALPHA_EXAMPLE is the disposable Phase 2 instance — an example,
-// not a production default. Pass your own { contractId, rpcUrl,
-// networkPassphrase } in real code.
-const client = createReadClient(TESTNET_ALPHA_EXAMPLE);
+// No v0.2 instance is deployed yet (docs/migrations/v0.1-to-v0.2.md) --
+// pass your own { contractId, rpcUrl, networkPassphrase } once one exists.
+// `TESTNET_ALPHA_EXAMPLE` still exists but points at the v0.1 instance,
+// which does not speak this v0.2 ABI; do not use it with this client.
+const client = createReadClient(config);
 
 const admin = await client.getAdmin(); // string | null
 const attestor = await client.getAttestor(); // string | null
-const score = await client.getReputationScore("G...WALLET"); // number
-const history = await client.getAttestations("G...WALLET"); // AttestationView[]
+const score = await client.getReputationScore("G...WALLET"); // number, O(1)
 const wallet = await client.getWalletForGithub(githubIdHash); // string | null
+```
+
+### Paginated attestation history (v0.2)
+
+```ts
+import { createReadClient, MAX_PAGE_SIZE, parseProofOwlError, ProofOwlErrorCode } from "@proofowl/contract-sdk";
+
+const client = createReadClient(config);
+
+const count = await client.getAttestationCount("G...WALLET"); // number
+
+// One entry by its zero-based sequence.
+const first = await client.getAttestation("G...WALLET", 0); // AttestationView
+
+// A bounded page (limit must be 1..=MAX_PAGE_SIZE, enforced client-side
+// too, before any round-trip).
+const page = await client.getAttestationsPage("G...WALLET", 0, MAX_PAGE_SIZE);
+
+// Sweep the whole history in pages -- the pattern any indexer or
+// frontend "load more" button should use instead of one big call.
+async function fetchFullHistory(wallet: string) {
+  const all = [];
+  let start = 0;
+  for (;;) {
+    const p = await client.getAttestationsPage(wallet, start, MAX_PAGE_SIZE);
+    all.push(...p);
+    if (p.length < MAX_PAGE_SIZE) break; // reached the end
+    start += p.length;
+  }
+  return all;
+}
+
+// `start` beyond the wallet's count throws; parse it like any other
+// contract error.
+try {
+  await client.getAttestation("G...WALLET", 9999);
+} catch (err) {
+  if (parseProofOwlError(err) === ProofOwlErrorCode.SequenceOutOfRange) {
+    // expected: that sequence does not exist for this wallet
+  } else {
+    throw err;
+  }
+}
 ```
 
 ### Prepare a two-party link (the SDK does not sign it)
@@ -93,14 +150,15 @@ const { transaction, needsSignatureFrom, invoker } = await prepareLinkGithub(con
 //   1. the contributor signs the envelope + their root auth entry
 //      (e.g. via a wallet like Freighter);
 //   2. the backend signs the attestor's auth entry — ONLY after its own
-//      GitHub OAuth / challenge verification (see attestor-protocol-v1.md);
+//      GitHub OAuth / challenge verification (see attestor-protocol-v2.md);
 //   3. whoever holds the fully-signed tx submits it.
 // This SDK performs none of steps 1-3.
 ```
 
 `prepareUnlinkGithub` has the same shape. `prepareSubmitAttestation`,
-`prepareBumpWalletTtl`, and `prepareSetAttestor` are single-signer and
-return the unsigned `AssembledTransaction` directly.
+`prepareBumpWalletCoreTtl`, `prepareBumpAttestationsTtlPage`, and
+`prepareSetAttestor` are single-signer and return the unsigned
+`AssembledTransaction` directly.
 
 ### Canonical hashes
 
@@ -131,12 +189,18 @@ Full rules and rejection cases:
 ## Read-only testnet integration test
 
 `src/testnet.integration.test.ts` calls only view methods (`get_admin`,
-`get_attestor`, and a history/score lookup for an address with no
-history) against the public Phase 2 alpha instance. It is **skipped**
-unless `PROOFOWL_INTEGRATION=1`:
+`get_attestor`, and a count/score lookup for an address with no
+history) against a live **v0.2** instance. No v0.2 instance has been
+deployed to any network yet
+(`../../docs/migrations/v0.1-to-v0.2.md`), so this test is **always
+skipped** until both `PROOFOWL_INTEGRATION=1` and
+`PROOFOWL_V2_CONTRACT_ID=C...` are supplied — it deliberately does not
+default to the v0.1 testnet alpha instance, which does not speak this
+client's ABI:
 
 ```
-npm run test:integration      # or: make sdk-integration-testnet
+PROOFOWL_INTEGRATION=1 PROOFOWL_V2_CONTRACT_ID=C... npm run test:integration
+# or: make sdk-integration-testnet (same env vars)
 ```
 
 It never signs or submits anything.
