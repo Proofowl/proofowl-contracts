@@ -76,10 +76,12 @@
 //! paginated ([`ProofOwlRegistry::get_attestation_count`],
 //! [`ProofOwlRegistry::get_attestation`],
 //! [`ProofOwlRegistry::get_attestations_page`]) in place of v0.1's
-//! unbounded `get_attestations`. `get_reputation_score` and TTL
-//! maintenance still scale with history size at this stage of the
-//! redesign; a running score counter and bounded TTL maintenance land in
-//! follow-on changes (see `docs/adr/0004-paginated-attestation-storage.md`).
+//! unbounded `get_attestations`, and [`ProofOwlRegistry::get_reputation_score`]
+//! is O(1) against a running [`DataKey::ReputationScore`] counter that
+//! `submit_attestation` updates atomically, never re-derived from a
+//! scan. TTL maintenance still scales with history size at this stage
+//! of the redesign; bounded, paginated TTL maintenance lands in a
+//! follow-on change (see `docs/adr/0004-paginated-attestation-storage.md`).
 
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, Address, BytesN, Env,
@@ -138,6 +140,10 @@ pub enum DataKey {
     /// `wallet -> u32`: how many attestations this wallet has, and the
     /// next `sequence` to write at.
     AttestationCount(Address),
+    /// `wallet -> u32`: running reputation score, updated atomically by
+    /// `submit_attestation`. Never re-derived from a full scan — see
+    /// `docs/adr/0004-paginated-attestation-storage.md`.
+    ReputationScore(Address),
     /// `pr_hash -> ()` global duplicate-PR guard.
     SeenPr(BytesN<32>),
 }
@@ -290,6 +296,14 @@ pub struct AttestationRecorded {
     pub complexity: u32,
     pub pr_hash: BytesN<32>,
     pub timestamp: u64,
+    /// Zero-based index of this attestation in `wallet`'s history —
+    /// the same `sequence` [`ProofOwlRegistry::get_attestation`] and
+    /// [`ProofOwlRegistry::get_attestations_page`] address it by. New
+    /// in v0.2; an indexer building a passport from events alone can
+    /// use it to detect gaps or reorderings without a separate
+    /// `get_attestation_count` round-trip. See
+    /// `docs/integration/event-indexer-v2.md`.
+    pub sequence: u32,
 }
 
 #[contract]
@@ -500,14 +514,25 @@ impl ProofOwlRegistry {
         let seq = attestation_count(&env, &wallet);
         let entry_key = DataKey::AttestationEntry(wallet.clone(), seq);
         let count_key = DataKey::AttestationCount(wallet.clone());
+        let score_key = DataKey::ReputationScore(wallet.clone());
+
+        let points = if complexity == 0 {
+            UNVERIFIED_COMPLEXITY_SCORE
+        } else {
+            complexity
+        };
+        let current_score: u32 = env.storage().persistent().get(&score_key).unwrap_or(0);
+        let new_score = current_score.saturating_add(points);
 
         env.storage().persistent().set(&entry_key, &attestation);
         env.storage().persistent().set(&count_key, &(seq + 1));
+        env.storage().persistent().set(&score_key, &new_score);
         env.storage().persistent().set(&pr_key, &());
 
         // Keep every record this contribution depends on warm.
         extend_persistent(&env, &entry_key);
         extend_persistent(&env, &count_key);
+        extend_persistent(&env, &score_key);
         extend_persistent(&env, &pr_key);
         extend_persistent(&env, &github_key);
         extend_persistent(&env, &DataKey::WalletLink(wallet.clone()));
@@ -521,6 +546,7 @@ impl ProofOwlRegistry {
             complexity,
             pr_hash,
             timestamp,
+            sequence: seq,
         }
         .publish(&env);
 
@@ -628,27 +654,14 @@ impl ProofOwlRegistry {
     /// saturates at `u32::MAX`; with the accepted tier values that ceiling
     /// is unreachable in practice, and the result is fully deterministic.
     ///
-    /// Currently re-folds the full history on every call; a running,
-    /// O(1) counter lands in a follow-on change — see
+    /// O(1): reads the running counter `submit_attestation` maintains
+    /// atomically, never re-derived from a scan of the history — see
     /// `docs/adr/0004-paginated-attestation-storage.md`.
     pub fn get_reputation_score(env: Env, wallet: Address) -> u32 {
-        let count = attestation_count(&env, &wallet);
-        let mut score = 0u32;
-        for seq in 0..count {
-            if let Some(entry) = env
-                .storage()
-                .persistent()
-                .get::<_, Attestation>(&DataKey::AttestationEntry(wallet.clone(), seq))
-            {
-                let points = if entry.complexity == 0 {
-                    UNVERIFIED_COMPLEXITY_SCORE
-                } else {
-                    entry.complexity
-                };
-                score = score.saturating_add(points);
-            }
-        }
-        score
+        env.storage()
+            .persistent()
+            .get(&DataKey::ReputationScore(wallet))
+            .unwrap_or(0)
     }
 
     pub fn get_wallet_for_github(env: Env, github_id_hash: BytesN<32>) -> Option<Address> {
