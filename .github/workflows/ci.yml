@@ -57,6 +57,13 @@ jobs:
       - name: Adversarial and security test suite
         run: cargo test --test security_matrix --test state_machine --test ttl_replay --test boundary_and_events --test sdk_vectors
 
+      # v0.2 structural regression guard (docs/adr/0004-paginated-attestation-storage.md):
+      # fails fast, statically, if a future change reintroduces v0.1's
+      # unbounded per-wallet attestation storage or drops the page-size
+      # bound that fixed it. Mirrors `make check-bounded-storage`.
+      - name: Bounded attestation storage guard
+        run: bash scripts/check_bounded_storage.sh
+
   # ---- Resource / scalability profile ---------------------------------
   # Diagnostic, not a correctness gate: measures cost growth and the
   # hard per-wallet history ceiling (docs/security/resource-profile-v1.md).

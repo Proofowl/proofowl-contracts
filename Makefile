@@ -60,9 +60,20 @@ test: build ## Run the full test suite (build first: an integration test needs t
 	$(CARGO) test --all
 
 .PHONY: check
-check: fmt-check lint build test ## Complete local quality gate (matches CI)
+check: fmt-check lint build test check-bounded-storage ## Complete local quality gate (matches CI)
 	@echo
-	@echo "OK — fmt, clippy, wasm build, and tests all passed."
+	@echo "OK — fmt, clippy, wasm build, tests, and bounded-storage guard all passed."
+
+# --- v0.2: bounded attestation storage guarantee ------------------------
+# Structural regression guard (docs/adr/0004-paginated-attestation-storage.md):
+# fails fast, statically, if src/lib.rs ever reintroduces v0.1's
+# unbounded per-wallet attestation storage or drops the page-size bound
+# that fixed it. Complements, does not replace, the runtime proof in
+# tests/state_machine.rs / tests/security_matrix.rs / tests/resource_profile.rs.
+
+.PHONY: check-bounded-storage
+check-bounded-storage: ## Static guard: v0.1's unbounded storage pattern cannot silently return
+	bash scripts/check_bounded_storage.sh
 
 # --- Phase 4: adversarial and security testing --------------------------
 # These test files already run under `make test` / `cargo test --all`
