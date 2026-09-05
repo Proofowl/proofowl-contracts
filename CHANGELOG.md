@@ -15,6 +15,53 @@ Testnet section below); no mainnet deployment exists.
 
 ## [Unreleased]
 
+### Adversarial and security testing (Phase 4)
+- **Formal threat model**
+  (`docs/security/threat-model-v1.md`) covering all 16 required threat
+  categories (malicious wallet holder, identity squatting, compromised
+  attestor/admin, hostile backend input, replayed attestation, bad
+  indexer, RPC/stale-event risk, TTL expiration, front-running, DoS /
+  resource exhaustion, hash-collision / canonicalization disagreement,
+  key loss, supply-chain compromise, protocol downgrade), each with
+  attacker capability, mitigation, residual risk, and severity. States
+  plainly that the contract is not trustless — the attestor is a
+  documented, load-bearing trust anchor.
+- **New adversarial test suites** (`tests/`, all deterministic and
+  offline): `security_matrix.rs` (full auth-failure matrix, admin
+  immutability, error-code discriminant stability), `state_machine.rs`
+  (fixed-seed, model-based long-sequence invariant testing),
+  `ttl_replay.rs` (TTL refresh correctness at realistic scale,
+  permissionless-keep-alive purity, duplicate-PR survival across
+  repeated keep-alive cycles), `boundary_and_events.rs` (boundary/
+  malformed inputs, exact event-emission correctness),
+  `sdk_vectors.rs` (the Soroban host's own SHA-256 reproduces the
+  TypeScript SDK's pinned canonical-hash vectors byte-for-byte).
+- **Measured resource/scalability profile**
+  (`docs/security/resource-profile-v1.md`,
+  `tests/resource_profile.rs`): deploys the real release WASM and uses
+  the SDK's own `cost_estimate()` instrumentation. Finding: a single
+  wallet's attestation history has a **hard, measured ceiling** — 286
+  attestations succeed, the 287th `submit_attestation` call fails
+  outright (the entry exceeds Soroban's 65,536-byte per-contract-data-
+  entry limit), after which that wallet can never receive another
+  attestation or TTL refresh. Verdict: acceptable for testnet alpha and
+  an explicitly bounded pilot; **requires the scoped (not implemented)
+  paginated-storage redesign before mainnet or unbounded production
+  scope.**
+- **Security review package**: `docs/security/security-review-checklist-v1.md`
+  (line-item checklist, severity rubric, release-blocker definition,
+  dependency-review procedure, audit-handoff checklist) and
+  `docs/security/known-risks-v1.md` (ranked, honest list of open risks
+  and accepted limitations). `SECURITY.md`, `PRODUCTION_READINESS.md`,
+  `README.md`, and ADRs 0001–0003 now link this material.
+- **CI/tooling**: `make security-test`, `make resource-profile`,
+  `make audit-ready`; CI gains an explicit "Adversarial and security
+  test suite" step and a scheduled/manual `resource-profile` job. No
+  existing check was weakened.
+- The contract itself was **not modified** in this phase — testing
+  found one material scalability finding (above), documented per the
+  phase's rules of engagement rather than fixed reactively.
+
 ### Integration contract (Phase 3)
 - **Versioned integration spec** under `docs/integration/`:
   `contract-api-v1.md` (every function — params, auth, errors, events,

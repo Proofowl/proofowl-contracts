@@ -40,6 +40,11 @@ it off. If an item cannot be satisfied, the release does not go out.
       `docs/adr/` if it was a real design decision.
 - [ ] No document claims an audit, deployment, live integration, bug
       bounty, response SLA, or production usage that does not exist.
+- [ ] `docs/security/known-risks-v1.md` reflects the current state —
+      a risk that was closed since it was written is marked resolved,
+      not silently left looking open; a new one found since is added.
+      Run `docs/security/security-review-checklist-v1.md` §1 against
+      the release commit before ticking this box.
 
 ## E. Artifact
 
