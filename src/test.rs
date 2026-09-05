@@ -318,7 +318,7 @@ fn unlink_preserves_history_and_global_pr_dedup() {
     client.unlink_github(&wallet, &attestor, &gh);
 
     // Reputation earned stays with the wallet that earned it.
-    assert_eq!(client.get_attestations(&wallet).len(), 1);
+    assert_eq!(client.get_attestation_count(&wallet), 1);
     assert_eq!(client.get_reputation_score(&wallet), 150);
 
     // Re-link the identity to a new wallet.
@@ -349,6 +349,7 @@ fn unlink_preserves_history_and_global_pr_dedup() {
         &hash(&env, 201),
     );
     assert_eq!(client.get_reputation_score(&new_wallet), 150);
+    assert_eq!(client.get_attestation_count(&wallet), 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -367,15 +368,19 @@ fn submit_attestation_resolves_wallet_and_records_indexer_fields() {
         client.submit_attestation(&attestor, &gh, &repo(&env), &123u32, &101u64, &150u32, &pr);
     assert_eq!(returned, wallet);
 
-    let list = client.get_attestations(&wallet);
-    assert_eq!(list.len(), 1);
-    let a = list.get(0).unwrap();
-    assert_eq!(a.repo, repo(&env));
-    assert_eq!(a.pr_number, 123);
-    assert_eq!(a.issue_id, 101);
-    assert_eq!(a.complexity, 150);
-    assert_eq!(a.pr_hash, pr);
-    assert_eq!(a.timestamp, TS); // ledger time, not caller-supplied
+    assert_eq!(client.get_attestation_count(&wallet), 1);
+    let a = client.get_attestation(&wallet, &0);
+    assert_eq!(
+        a,
+        Attestation {
+            repo: repo(&env),
+            pr_number: 123,
+            issue_id: 101,
+            complexity: 150,
+            pr_hash: pr,
+            timestamp: TS, // ledger time, not caller-supplied
+        }
+    );
     assert_eq!(client.get_reputation_score(&wallet), 150);
 }
 
@@ -401,7 +406,7 @@ fn submit_attestation_rejects_invalid_complexity() {
             "complexity {bad} should be rejected"
         );
     }
-    assert!(client.get_attestations(&wallet).is_empty());
+    assert_eq!(client.get_attestation_count(&wallet), 0);
 }
 
 #[test]
@@ -424,7 +429,7 @@ fn submit_attestation_accepts_every_valid_complexity_tier() {
     }
     // 50 (unverified) + 100 + 150 + 200
     assert_eq!(client.get_reputation_score(&wallet), 500);
-    assert_eq!(client.get_attestations(&wallet).len(), 4);
+    assert_eq!(client.get_attestation_count(&wallet), 4);
 }
 
 #[test]
@@ -643,7 +648,7 @@ fn reputation_score_sums_multiple_attestations() {
     );
 
     assert_eq!(client.get_reputation_score(&wallet), 450);
-    assert_eq!(client.get_attestations(&wallet).len(), 3);
+    assert_eq!(client.get_attestation_count(&wallet), 3);
 }
 
 #[test]
@@ -651,11 +656,156 @@ fn reputation_score_is_zero_for_unknown_wallet() {
     let (env, client, ..) = setup();
     let nobody = Address::generate(&env);
     assert_eq!(client.get_reputation_score(&nobody), 0);
-    assert!(client.get_attestations(&nobody).is_empty());
+    assert_eq!(client.get_attestation_count(&nobody), 0);
 }
 
 // ---------------------------------------------------------------------------
-// 7. Storage durability (TTL)
+// 7. Paginated attestation queries (v0.2)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn get_attestation_by_sequence_matches_submission_order() {
+    let (env, client, _admin, attestor) = setup();
+    let wallet = Address::generate(&env);
+    let gh = hash(&env, 13);
+    client.link_github(&wallet, &attestor, &gh);
+
+    for i in 0..5u32 {
+        client.submit_attestation(
+            &attestor,
+            &gh,
+            &repo(&env),
+            &i,
+            &(i as u64),
+            &100u32,
+            &hash(&env, 110 + i as u8),
+        );
+    }
+
+    for i in 0..5u32 {
+        let a = client.get_attestation(&wallet, &i);
+        assert_eq!(a.pr_number, i, "sequence {i} must match submission order");
+    }
+    assert_eq!(
+        client.try_get_attestation(&wallet, &5u32),
+        Err(Ok(Error::SequenceOutOfRange))
+    );
+}
+
+#[test]
+fn get_attestations_page_boundaries() {
+    let (env, client, _admin, attestor) = setup();
+    let wallet = Address::generate(&env);
+    let gh = hash(&env, 14);
+    client.link_github(&wallet, &attestor, &gh);
+
+    for i in 0..10u32 {
+        client.submit_attestation(
+            &attestor,
+            &gh,
+            &repo(&env),
+            &i,
+            &(i as u64),
+            &100u32,
+            &hash(&env, 120 + i as u8),
+        );
+    }
+
+    // A full page in the middle.
+    let page = client.get_attestations_page(&wallet, &2u32, &3u32);
+    assert_eq!(page.len(), 3);
+    assert_eq!(page.get(0).unwrap().pr_number, 2);
+    assert_eq!(page.get(2).unwrap().pr_number, 4);
+
+    // A page that runs past the end is truncated, not an error.
+    let tail = client.get_attestations_page(&wallet, &8u32, &50u32);
+    assert_eq!(tail.len(), 2);
+
+    // start == count is a valid, empty page (end-of-pagination signal).
+    let empty = client.get_attestations_page(&wallet, &10u32, &10u32);
+    assert!(empty.is_empty());
+
+    // start > count is an error.
+    assert_eq!(
+        client.try_get_attestations_page(&wallet, &11u32, &10u32),
+        Err(Ok(Error::PageStartOutOfRange))
+    );
+
+    // limit == 0 is an error.
+    assert_eq!(
+        client.try_get_attestations_page(&wallet, &0u32, &0u32),
+        Err(Ok(Error::InvalidPageLimit))
+    );
+
+    // limit above MAX_PAGE_SIZE is an error.
+    assert_eq!(
+        client.try_get_attestations_page(&wallet, &0u32, &(MAX_PAGE_SIZE + 1)),
+        Err(Ok(Error::PageLimitExceeded))
+    );
+
+    // limit == MAX_PAGE_SIZE is accepted.
+    let max_page = client.get_attestations_page(&wallet, &0u32, &MAX_PAGE_SIZE);
+    assert_eq!(max_page.len(), 10);
+}
+
+#[test]
+fn paginated_reads_reconstruct_the_same_history_as_sequential_gets() {
+    let (env, client, _admin, attestor) = setup();
+    let wallet = Address::generate(&env);
+    let gh = hash(&env, 15);
+    client.link_github(&wallet, &attestor, &gh);
+
+    let tiers = [0u32, 100, 150, 200, 0, 100, 150];
+    for (i, c) in tiers.iter().enumerate() {
+        client.submit_attestation(
+            &attestor,
+            &gh,
+            &repo(&env),
+            &(i as u32),
+            &(i as u64),
+            c,
+            &hash(&env, 130 + i as u8),
+        );
+    }
+
+    let count = client.get_attestation_count(&wallet);
+    assert_eq!(count, tiers.len() as u32);
+
+    // Reconstruct via get_attestation, one at a time.
+    let mut via_get: Vec<Attestation> = Vec::new(&env);
+    for seq in 0..count {
+        via_get.push_back(client.get_attestation(&wallet, &seq));
+    }
+
+    // Reconstruct via a small page size, several pages.
+    let mut via_pages: Vec<Attestation> = Vec::new(&env);
+    let mut start = 0u32;
+    loop {
+        let page = client.get_attestations_page(&wallet, &start, &2u32);
+        let n = page.len();
+        for a in page.iter() {
+            via_pages.push_back(a);
+        }
+        if n < 2 {
+            break;
+        }
+        start += n;
+    }
+
+    assert_eq!(via_get, via_pages);
+
+    // And the running score matches an independent recompute from
+    // either reconstruction.
+    let recomputed: u32 = via_get
+        .iter()
+        .map(|a| if a.complexity == 0 { 50 } else { a.complexity })
+        .fold(0u32, |acc, p| acc.saturating_add(p));
+    assert_eq!(client.get_reputation_score(&wallet), recomputed);
+}
+
+// ---------------------------------------------------------------------------
+// 8. Storage durability (TTL) — baseline. Extended coverage lives in
+// `tests/ttl_replay.rs`.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -674,7 +824,7 @@ fn linking_extends_ttl_on_all_link_records() {
 }
 
 #[test]
-fn attesting_extends_ttl_on_history_and_pr_records() {
+fn attesting_extends_ttl_on_entry_count_score_and_pr_record() {
     let (env, client, _admin, attestor) = setup();
     let wallet = Address::generate(&env);
     let gh = hash(&env, 2);
@@ -684,86 +834,85 @@ fn attesting_extends_ttl_on_history_and_pr_records() {
 
     env.as_contract(&client.address, || {
         let p = env.storage().persistent();
-        assert!(p.get_ttl(&DataKey::Attestations(wallet.clone())) >= REGISTRY_TTL_THRESHOLD);
+        assert!(p.get_ttl(&DataKey::AttestationEntry(wallet.clone(), 0)) >= REGISTRY_TTL_THRESHOLD);
+        assert!(p.get_ttl(&DataKey::AttestationCount(wallet.clone())) >= REGISTRY_TTL_THRESHOLD);
+        assert!(p.get_ttl(&DataKey::ReputationScore(wallet.clone())) >= REGISTRY_TTL_THRESHOLD);
         assert!(p.get_ttl(&DataKey::SeenPr(pr.clone())) >= REGISTRY_TTL_THRESHOLD);
     });
 }
 
 #[test]
-fn bump_wallet_ttl_refreshes_cold_records_including_every_pr_marker() {
+fn bump_wallet_core_ttl_refreshes_the_o1_records_and_is_a_noop_for_unlinked_wallet() {
     let (env, client, _admin, attestor) = setup();
     let wallet = Address::generate(&env);
     let gh = hash(&env, 3);
     client.link_github(&wallet, &attestor, &gh);
+    client.submit_attestation(
+        &attestor,
+        &gh,
+        &repo(&env),
+        &1u32,
+        &1u64,
+        &100u32,
+        &hash(&env, 56),
+    );
 
-    // Three distinct PRs -> three SeenPr markers.
-    let prs = [hash(&env, 56), hash(&env, 57), hash(&env, 58)];
-    for (i, pr) in prs.iter().enumerate() {
-        client.submit_attestation(
-            &attestor,
-            &gh,
-            &repo(&env),
-            &(i as u32),
-            &(i as u64),
-            &100u32,
-            pr,
-        );
-    }
-
-    // Advance the ledger clock so every entry is now below the bump
-    // threshold (but not yet archived).
     env.ledger()
         .set_sequence_number(100 + REGISTRY_TTL_EXTEND_TO - REGISTRY_TTL_THRESHOLD + 10);
-
-    // Sanity: markers really have decayed past the threshold first.
-    env.as_contract(&client.address, || {
-        let p = env.storage().persistent();
-        for pr in &prs {
-            assert!(p.get_ttl(&DataKey::SeenPr(pr.clone())) < REGISTRY_TTL_THRESHOLD);
-        }
-    });
-
-    client.bump_wallet_ttl(&wallet);
+    client.bump_wallet_core_ttl(&wallet);
 
     env.as_contract(&client.address, || {
         let p = env.storage().persistent();
         assert!(p.get_ttl(&DataKey::WalletLink(wallet.clone())) >= REGISTRY_TTL_THRESHOLD);
         assert!(p.get_ttl(&DataKey::GithubLink(gh.clone())) >= REGISTRY_TTL_THRESHOLD);
-        assert!(p.get_ttl(&DataKey::Attestations(wallet.clone())) >= REGISTRY_TTL_THRESHOLD);
-        // The core of blocker #2: every PR-dedup marker was refreshed,
-        // so an old PR can never become re-submittable.
-        for pr in &prs {
-            assert!(p.get_ttl(&DataKey::SeenPr(pr.clone())) >= REGISTRY_TTL_THRESHOLD);
-        }
+        assert!(p.get_ttl(&DataKey::AttestationCount(wallet.clone())) >= REGISTRY_TTL_THRESHOLD);
+        assert!(p.get_ttl(&DataKey::ReputationScore(wallet.clone())) >= REGISTRY_TTL_THRESHOLD);
     });
+
+    // No-op (does not panic, changes nothing) for a wallet with no link
+    // and no history.
+    let nobody = Address::generate(&env);
+    client.bump_wallet_core_ttl(&nobody);
+    assert_eq!(client.get_github_for_wallet(&nobody), None);
 }
 
 #[test]
-fn bump_wallet_ttl_keeps_duplicate_pr_rejection_alive() {
+fn bump_attestations_ttl_page_refreshes_only_its_page() {
     let (env, client, _admin, attestor) = setup();
     let wallet = Address::generate(&env);
     let gh = hash(&env, 4);
     client.link_github(&wallet, &attestor, &gh);
-    let pr = hash(&env, 90);
-    client.submit_attestation(&attestor, &gh, &repo(&env), &1u32, &1u64, &150u32, &pr);
+    for i in 0..4u32 {
+        client.submit_attestation(
+            &attestor,
+            &gh,
+            &repo(&env),
+            &i,
+            &(i as u64),
+            &100u32,
+            &hash(&env, 60 + i as u8),
+        );
+    }
 
-    // Time passes; a keep-alive is run instead of letting the marker lapse.
     env.ledger()
         .set_sequence_number(100 + REGISTRY_TTL_EXTEND_TO - REGISTRY_TTL_THRESHOLD + 10);
-    client.bump_wallet_ttl(&wallet);
 
-    // The already-spent PR is still rejected.
-    assert_eq!(
-        client.try_submit_attestation(&attestor, &gh, &repo(&env), &1u32, &1u64, &150u32, &pr),
-        Err(Ok(Error::DuplicateAttestation))
-    );
-}
+    // Bump only the first page (entries 0..2).
+    let refreshed = client.bump_attestations_ttl_page(&wallet, &0u32, &2u32);
+    assert_eq!(refreshed, 2);
 
-#[test]
-fn bump_wallet_ttl_is_a_noop_for_unlinked_wallet() {
-    let (env, client, ..) = setup();
-    let nobody = Address::generate(&env);
-    client.bump_wallet_ttl(&nobody); // must not panic
+    env.as_contract(&client.address, || {
+        let p = env.storage().persistent();
+        assert!(p.get_ttl(&DataKey::AttestationEntry(wallet.clone(), 0)) >= REGISTRY_TTL_THRESHOLD);
+        assert!(p.get_ttl(&DataKey::AttestationEntry(wallet.clone(), 1)) >= REGISTRY_TTL_THRESHOLD);
+        // Entries 2 and 3 are untouched by this page's bump.
+        assert!(p.get_ttl(&DataKey::AttestationEntry(wallet.clone(), 2)) < REGISTRY_TTL_THRESHOLD);
+        assert!(p.get_ttl(&DataKey::AttestationEntry(wallet.clone(), 3)) < REGISTRY_TTL_THRESHOLD);
+    });
+
+    // A page starting at the end refreshes nothing and says so.
+    let refreshed_at_end = client.bump_attestations_ttl_page(&wallet, &4u32, &2u32);
+    assert_eq!(refreshed_at_end, 0);
 }
 
 // ---------------------------------------------------------------------------

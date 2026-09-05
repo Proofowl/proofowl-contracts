@@ -164,20 +164,52 @@ fn registry_state_machine_holds_its_invariants_over_a_long_hostile_sequence() {
 
     // Final full-state cross-check, independent of the per-step checks
     // above: recompute every wallet's expected attestation count and
-    // score from the model and compare against both `get_attestations`
-    // and `get_reputation_score`.
+    // score from the model and compare against `get_attestation_count`,
+    // sequential `get_attestation`, a full `get_attestations_page`, and
+    // `get_reputation_score` -- four independent ways of reading the
+    // same history, which must all agree.
     for (i, w) in wallets.iter().enumerate() {
-        let list = client.get_attestations(w);
+        let count = client.get_attestation_count(w);
         assert_eq!(
-            list.len(),
-            model.count[i],
+            count, model.count[i],
             "final attestation count mismatch for wallet {i}"
         );
-        let recomputed: u32 = list.iter().map(|a| score_for(a.complexity)).sum();
+
+        let mut recomputed = 0u32;
+        for seq in 0..count {
+            let a = client.get_attestation(w, &seq);
+            recomputed += score_for(a.complexity);
+        }
         assert_eq!(
             recomputed, model.score[i],
             "final recompute mismatch for wallet {i}"
         );
+
+        // Sweeping the full history in bounded pages (limit 20, well
+        // under MAX_PAGE_SIZE) must reconstruct the identical set,
+        // regardless of how large the history has grown.
+        let mut via_page_count = 0u32;
+        let mut via_page_score = 0u32;
+        let mut start = 0u32;
+        loop {
+            let page = client.get_attestations_page(w, &start, &20u32);
+            let n = page.len();
+            via_page_count += n;
+            via_page_score += page.iter().map(|a| score_for(a.complexity)).sum::<u32>();
+            if n < 20 {
+                break;
+            }
+            start += n;
+        }
+        assert_eq!(
+            via_page_count, count,
+            "final paged count mismatch for wallet {i}"
+        );
+        assert_eq!(
+            via_page_score, model.score[i],
+            "final paged recompute mismatch for wallet {i}"
+        );
+
         assert_eq!(
             client.get_reputation_score(w),
             model.score[i],
@@ -459,9 +491,20 @@ fn do_bump_ttl(client: &ProofOwlRegistryClient, rng: &mut Rng, wallets: &[Addres
     let wi = rng.below(N_WALLETS);
     let before_gh = client.get_github_for_wallet(&wallets[wi]);
     let before_score = client.get_reputation_score(&wallets[wi]);
-    let before_count = client.get_attestations(&wallets[wi]).len();
+    let before_count = client.get_attestation_count(&wallets[wi]);
 
-    client.bump_wallet_ttl(&wallets[wi]);
+    client.bump_wallet_core_ttl(&wallets[wi]);
+    // Sweep the whole history in bounded pages -- both bounded TTL
+    // functions together are the v0.2 replacement for v0.1's single
+    // unbounded `bump_wallet_ttl`.
+    let mut start = 0u32;
+    loop {
+        let refreshed = client.bump_attestations_ttl_page(&wallets[wi], &start, &10u32);
+        if refreshed < 10 {
+            break;
+        }
+        start += refreshed;
+    }
 
     // Permissionless keep-alive: must never create a link, never add
     // reputation, never bypass any authorization -- it changes no
@@ -469,17 +512,17 @@ fn do_bump_ttl(client: &ProofOwlRegistryClient, rng: &mut Rng, wallets: &[Addres
     assert_eq!(
         client.get_github_for_wallet(&wallets[wi]),
         before_gh,
-        "step {step}: bump_wallet_ttl changed the link"
+        "step {step}: bounded TTL maintenance changed the link"
     );
     assert_eq!(
         client.get_reputation_score(&wallets[wi]),
         before_score,
-        "step {step}: bump_wallet_ttl changed the score"
+        "step {step}: bounded TTL maintenance changed the score"
     );
     assert_eq!(
-        client.get_attestations(&wallets[wi]).len(),
+        client.get_attestation_count(&wallets[wi]),
         before_count,
-        "step {step}: bump_wallet_ttl changed the history length"
+        "step {step}: bounded TTL maintenance changed the history length"
     );
 }
 
@@ -526,7 +569,7 @@ fn assert_scores_match(
 ) {
     for (wi, w) in wallets.iter().enumerate() {
         assert_eq!(
-            client.get_attestations(w).len(),
+            client.get_attestation_count(w),
             model.count[wi],
             "step {step}: wallet {wi} attestation count mismatch"
         );

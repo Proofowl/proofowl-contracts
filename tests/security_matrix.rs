@@ -16,7 +16,7 @@
 //! Everything here runs offline against the in-process Soroban `Env`.
 //! No network call, no real key, no testnet transaction.
 
-use proofowl_contracts::{Attestation, Error, ProofOwlRegistry, ProofOwlRegistryClient};
+use proofowl_contracts::{Error, ProofOwlRegistry, ProofOwlRegistryClient};
 use soroban_sdk::testutils::{Address as _, Ledger as _, MockAuth, MockAuthInvoke};
 use soroban_sdk::{Address, BytesN, Env, IntoVal, String};
 
@@ -272,7 +272,7 @@ fn submit_attestation_requires_attestor_signature_present() {
         &hash(&env, 40),
     );
     assert!(result.is_err(), "unsigned attestor call must be rejected");
-    assert!(client.get_attestations(&wallet).is_empty());
+    assert_eq!(client.get_attestation_count(&wallet), 0);
 }
 
 #[test]
@@ -295,7 +295,7 @@ fn submit_attestation_rejects_a_signed_but_wrong_attestor() {
         ),
         Err(Ok(Error::Unauthorized))
     );
-    assert!(client.get_attestations(&wallet).is_empty());
+    assert_eq!(client.get_attestation_count(&wallet), 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -357,7 +357,10 @@ fn admin_is_immutable_across_every_mutating_call() {
     client.submit_attestation(&new_attestor, &gh, &repo(&env), &1u32, &1u64, &100u32, &pr);
     assert_eq!(client.get_admin(), Some(admin.clone()));
 
-    client.bump_wallet_ttl(&wallet);
+    client.bump_wallet_core_ttl(&wallet);
+    assert_eq!(client.get_admin(), Some(admin.clone()));
+
+    client.bump_attestations_ttl_page(&wallet, &0u32, &10u32);
     assert_eq!(client.get_admin(), Some(admin.clone()));
 
     client.unlink_github(&wallet, &new_attestor, &gh);
@@ -392,6 +395,12 @@ fn error_code_discriminants_match_the_published_abi() {
     assert_eq!(Error::WalletNotLinked as u32, 7);
     assert_eq!(Error::InvalidComplexity as u32, 8);
     assert_eq!(Error::LinkNotFound as u32, 9);
+    // v0.2 additions -- appended, not renumbered; 1-9 above are the
+    // exact v0.1 values, unchanged (docs/adr/0004-paginated-attestation-storage.md).
+    assert_eq!(Error::InvalidPageLimit as u32, 10);
+    assert_eq!(Error::PageLimitExceeded as u32, 11);
+    assert_eq!(Error::SequenceOutOfRange as u32, 12);
+    assert_eq!(Error::PageStartOutOfRange as u32, 13);
 }
 
 // ---------------------------------------------------------------------------
@@ -455,7 +464,7 @@ fn not_initialized_is_reachable_and_rejects_every_gated_call() {
     // confirm they degrade gracefully (empty/None) rather than panic.
     // No attestation was ever accepted (every gated call above was
     // rejected), so the wallet's history is still empty.
-    assert!(client.get_attestations(&wallet).is_empty());
+    assert_eq!(client.get_attestation_count(&wallet), 0);
     assert_eq!(client.get_admin(), None);
 }
 
@@ -560,7 +569,7 @@ fn submit_attestation_for_unlinked_identity_never_credits_an_unrelated_wallet() 
         ),
         Err(Ok(Error::WalletNotLinked))
     );
-    assert!(client.get_attestations(&linked_wallet).is_empty());
+    assert_eq!(client.get_attestation_count(&linked_wallet), 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -616,7 +625,7 @@ fn invalid_complexity_leaves_no_partial_record_anywhere() {
     // used in the rejected attempts must NOT be marked seen (otherwise
     // a legitimate future submission with the same pr_hash would be
     // wrongly rejected as a duplicate).
-    assert!(client.get_attestations(&wallet).is_empty());
+    assert_eq!(client.get_attestation_count(&wallet), 0);
     assert_eq!(client.get_reputation_score(&wallet), 0);
     let reused_pr = hash(&env, 1u8);
     client.submit_attestation(
@@ -628,7 +637,7 @@ fn invalid_complexity_leaves_no_partial_record_anywhere() {
         &100u32,
         &reused_pr,
     );
-    assert_eq!(client.get_attestations(&wallet).len(), 1);
+    assert_eq!(client.get_attestation_count(&wallet), 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -657,13 +666,81 @@ fn reputation_score_matches_independent_recomputation() {
         );
     }
 
-    let list: soroban_sdk::Vec<Attestation> = client.get_attestations(&wallet);
-    let recomputed: u32 = list
-        .iter()
-        .map(|a| if a.complexity == 0 { 50 } else { a.complexity })
-        .sum();
+    let count = client.get_attestation_count(&wallet);
+    assert_eq!(count, tiers.len() as u32);
+    let mut recomputed = 0u32;
+    for seq in 0..count {
+        let a = client.get_attestation(&wallet, &seq);
+        recomputed += if a.complexity == 0 { 50 } else { a.complexity };
+    }
 
     assert_eq!(client.get_reputation_score(&wallet), recomputed);
     // 0->50, 100, 0->50, 150, 200, 0->50, 100 = 50+100+50+150+200+50+100
     assert_eq!(recomputed, 700);
+
+    // Cross-check a third way: a full page read must reconstruct the
+    // exact same set of attestations as the sequential get() loop above.
+    let page = client.get_attestations_page(&wallet, &0u32, &count);
+    assert_eq!(page.len(), count);
+    let via_page: u32 = page
+        .iter()
+        .map(|a| if a.complexity == 0 { 50 } else { a.complexity })
+        .sum();
+    assert_eq!(via_page, recomputed);
+}
+
+// ---------------------------------------------------------------------------
+// 13. Pagination error paths never mutate state -- neither data
+// (get_attestations_page is read-only by construction) nor TTLs
+// (bump_attestations_ttl_page must refresh nothing when it errors).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rejected_paginated_calls_change_nothing() {
+    let (env, client, _admin, attestor) = setup();
+    let wallet = Address::generate(&env);
+    let gh = hash(&env, 17);
+    client.link_github(&wallet, &attestor, &gh);
+    for i in 0..3u32 {
+        client.submit_attestation(
+            &attestor,
+            &gh,
+            &repo(&env),
+            &i,
+            &(i as u64),
+            &100u32,
+            &hash(&env, 170 + i as u8),
+        );
+    }
+    let count_before = client.get_attestation_count(&wallet);
+    let score_before = client.get_reputation_score(&wallet);
+
+    // Every one of these must be rejected without changing count, score,
+    // or any attestation's content.
+    assert_eq!(
+        client.try_get_attestations_page(&wallet, &0u32, &0u32),
+        Err(Ok(Error::InvalidPageLimit))
+    );
+    assert_eq!(
+        client.try_get_attestations_page(&wallet, &4u32, &10u32),
+        Err(Ok(Error::PageStartOutOfRange))
+    );
+    assert_eq!(
+        client.try_get_attestation(&wallet, &3u32),
+        Err(Ok(Error::SequenceOutOfRange))
+    );
+    assert_eq!(
+        client.try_bump_attestations_ttl_page(&wallet, &0u32, &0u32),
+        Err(Ok(Error::InvalidPageLimit))
+    );
+    assert_eq!(
+        client.try_bump_attestations_ttl_page(&wallet, &4u32, &10u32),
+        Err(Ok(Error::PageStartOutOfRange))
+    );
+
+    assert_eq!(client.get_attestation_count(&wallet), count_before);
+    assert_eq!(client.get_reputation_score(&wallet), score_before);
+    for i in 0..3u32 {
+        assert_eq!(client.get_attestation(&wallet, &i).pr_number, i);
+    }
 }
