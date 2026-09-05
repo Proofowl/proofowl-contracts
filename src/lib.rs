@@ -47,22 +47,36 @@
 //! ## Storage durability
 //!
 //! Every long-lived record (wallet links, GitHub links, PR-dedup
-//! markers, attestation histories, and the instance itself) has its TTL
-//! extended on every write and on every read-write path that touches it,
-//! plus a permissionless [`ProofOwlRegistry::bump_wallet_ttl`] keep-alive
-//! that also refreshes every `SeenPr` marker in a wallet's history. See
-//! `SECURITY.md` for the exact policy and its rationale.
+//! markers, attestation entries, and the instance itself) has its TTL
+//! extended on every write and on every read-write path that touches it.
+//! See `SECURITY.md` for the exact policy and its rationale, and
+//! `docs/adr/0004-paginated-attestation-storage.md` §"Bounded TTL
+//! maintenance" for how a wallet's growing history is kept alive without
+//! ever loading it all in one call.
 //!
-//! ## Known MVP scalability limitation
+//! ## v0.2: bounded, per-record attestation storage
 //!
-//! A wallet's attestations are held in a single `Vec<Attestation>` under
-//! one storage key. Reads (`get_attestations`, `get_reputation_score`)
-//! and `bump_wallet_ttl` load and iterate the whole vector, and each
-//! `submit_attestation` rewrites it. This is fine for the expected
-//! per-contributor volume in the MVP, but production scale needs
-//! paginated / indexed storage (e.g. one entry per attestation keyed by
-//! `(wallet, seq)` plus a running score counter). That refactor is
-//! deliberately deferred — see `SECURITY.md`.
+//! v0.1 stored a wallet's entire attestation history in one
+//! `Vec<Attestation>` under a single persistent entry. That entry hit
+//! Soroban's 65,536-byte per-entry limit at ~286 attestations, after
+//! which the wallet could never receive another attestation or TTL
+//! refresh — see `docs/security/resource-profile-v1.md` and
+//! `docs/adr/0004-paginated-attestation-storage.md`.
+//!
+//! v0.2 replaces that with one persistent entry per attestation,
+//! addressed by a zero-based sequence number, plus a small counter:
+//!
+//! * [`DataKey::AttestationEntry`]`(wallet, seq)` — one [`Attestation`],
+//!   `seq` in `0..count`.
+//! * [`DataKey::AttestationCount`]`(wallet)` — how many attestations
+//!   this wallet has, and the next `seq` to use.
+//!
+//! No single entry's size depends on history length any more, so the
+//! v0.1 ceiling cannot recur by construction. This commit-stage of the
+//! redesign keeps the v0.1 public API shape (`get_attestations`,
+//! `get_reputation_score`, `bump_wallet_ttl`) working correctly against
+//! the new storage while the bounded/paginated public API lands in
+//! follow-on changes (see `docs/adr/0004-paginated-attestation-storage.md`).
 
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, Address, BytesN, Env,
@@ -114,8 +128,13 @@ pub enum DataKey {
     WalletLink(Address),
     /// `github_id_hash -> wallet`.
     GithubLink(BytesN<32>),
-    /// `wallet -> Vec<Attestation>`.
-    Attestations(Address),
+    /// `(wallet, sequence) -> Attestation`. One persistent entry per
+    /// attestation, `sequence` zero-based — see
+    /// `docs/adr/0004-paginated-attestation-storage.md`.
+    AttestationEntry(Address, u32),
+    /// `wallet -> u32`: how many attestations this wallet has, and the
+    /// next `sequence` to write at.
+    AttestationCount(Address),
     /// `pr_hash -> ()` global duplicate-PR guard.
     SeenPr(BytesN<32>),
 }
@@ -160,7 +179,7 @@ const ALLOWED_COMPLEXITY: [u32; 4] = [0, 100, 150, 200];
 // hits zero; reading an archived entry fails until it is restored. Every
 // registry record here is meant to live indefinitely, so every write and
 // every read-write path re-extends the entries it touches, and anyone
-// can call `bump_wallet_ttl` to keep a passport warm for free.
+// can call a keep-alive to warm a wallet's records for free.
 //
 // At the ~5s mainnet ledger cadence: 1 day ~= 17_280 ledgers.
 //   * extend target : 120 days  (well under the ~180-day mainnet cap, so
@@ -187,6 +206,15 @@ fn extend_instance(env: &Env) {
     let extend_to = REGISTRY_TTL_EXTEND_TO.min(max);
     let threshold = REGISTRY_TTL_THRESHOLD.min(extend_to);
     env.storage().instance().extend_ttl(threshold, extend_to);
+}
+
+/// Read `AttestationCount(wallet)`, defaulting to `0` for a wallet with
+/// no attestations yet.
+fn attestation_count(env: &Env, wallet: &Address) -> u32 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::AttestationCount(wallet.clone()))
+        .unwrap_or(0)
 }
 
 // --- Events ---------------------------------------------------------------
@@ -346,11 +374,10 @@ impl ProofOwlRegistry {
     /// owner re-runs the off-chain GitHub verification.
     ///
     /// Both link records are removed. The wallet's attestation history
-    /// (`Attestations(wallet)`) and the global PR-dedup markers are left
-    /// untouched: a merged PR stays spent forever, and reputation already
-    /// earned stays attached to the wallet that earned it. Migrating a
-    /// history to a fresh wallet is out of scope for the MVP — see
-    /// `SECURITY.md`.
+    /// and the global PR-dedup markers are left untouched: a merged PR
+    /// stays spent forever, and reputation already earned stays attached
+    /// to the wallet that earned it. Migrating a history to a fresh
+    /// wallet is out of scope — see `SECURITY.md`.
     pub fn unlink_github(
         env: Env,
         wallet: Address,
@@ -395,6 +422,11 @@ impl ProofOwlRegistry {
     /// duplicate guard and must be derived canonically — see
     /// [`Attestation`]. The on-chain `timestamp` is the ledger time, not
     /// a caller-supplied value.
+    ///
+    /// Stored as one new persistent entry
+    /// (`AttestationEntry(wallet, seq)`) rather than appended to a
+    /// growing vector — see
+    /// `docs/adr/0004-paginated-attestation-storage.md`.
     // Each argument is a distinct on-chain fact the backend must pass
     // explicitly; a wrapper struct would only rename the same fields.
     #[allow(clippy::too_many_arguments)]
@@ -437,19 +469,17 @@ impl ProofOwlRegistry {
             timestamp,
         };
 
-        let attestations_key = DataKey::Attestations(wallet.clone());
-        let mut list: Vec<Attestation> = env
-            .storage()
-            .persistent()
-            .get(&attestations_key)
-            .unwrap_or(Vec::new(&env));
-        list.push_back(attestation);
+        let seq = attestation_count(&env, &wallet);
+        let entry_key = DataKey::AttestationEntry(wallet.clone(), seq);
+        let count_key = DataKey::AttestationCount(wallet.clone());
 
-        env.storage().persistent().set(&attestations_key, &list);
+        env.storage().persistent().set(&entry_key, &attestation);
+        env.storage().persistent().set(&count_key, &(seq + 1));
         env.storage().persistent().set(&pr_key, &());
 
         // Keep every record this contribution depends on warm.
-        extend_persistent(&env, &attestations_key);
+        extend_persistent(&env, &entry_key);
+        extend_persistent(&env, &count_key);
         extend_persistent(&env, &pr_key);
         extend_persistent(&env, &github_key);
         extend_persistent(&env, &DataKey::WalletLink(wallet.clone()));
@@ -470,20 +500,19 @@ impl ProofOwlRegistry {
     }
 
     /// Permissionless keep-alive. Extends the TTL of every long-lived
-    /// record tied to a wallet:
-    ///
-    /// * the wallet link and the GitHub link it points at,
-    /// * the attestation-history vector,
-    /// * **every `SeenPr` de-duplication marker** referenced by that
-    ///   history — so a merged PR can never become re-submittable just
-    ///   because its marker was allowed to expire.
+    /// record tied to a wallet: the wallet link, the GitHub link it
+    /// points at, every attestation entry, the attestation counter, and
+    /// every `SeenPr` de-duplication marker referenced by that history —
+    /// so a merged PR can never become re-submittable just because its
+    /// marker was allowed to expire.
     ///
     /// Anyone can call it (a frontend "keep my passport alive" button, a
     /// cron job). It only pushes out archival and never changes data.
     /// No-op for an unlinked wallet with no history.
     ///
-    /// Cost scales with the number of attestations for the wallet — see
-    /// the scalability note in the module docs.
+    /// Cost scales with the number of attestations for the wallet. A
+    /// bounded, paginated replacement lands in a follow-on change — see
+    /// `docs/adr/0004-paginated-attestation-storage.md`.
     pub fn bump_wallet_ttl(env: Env, wallet: Address) {
         let wallet_key = DataKey::WalletLink(wallet.clone());
         if let Some(github_id_hash) = env.storage().persistent().get::<_, BytesN<32>>(&wallet_key) {
@@ -491,26 +520,40 @@ impl ProofOwlRegistry {
             extend_persistent(&env, &DataKey::GithubLink(github_id_hash));
         }
 
-        let attestations_key = DataKey::Attestations(wallet);
-        if let Some(list) = env
-            .storage()
-            .persistent()
-            .get::<_, Vec<Attestation>>(&attestations_key)
-        {
-            extend_persistent(&env, &attestations_key);
-            for a in list.iter() {
-                extend_persistent(&env, &DataKey::SeenPr(a.pr_hash));
+        let count_key = DataKey::AttestationCount(wallet.clone());
+        let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
+        if count > 0 {
+            extend_persistent(&env, &count_key);
+            for seq in 0..count {
+                let entry_key = DataKey::AttestationEntry(wallet.clone(), seq);
+                if let Some(entry) = env.storage().persistent().get::<_, Attestation>(&entry_key) {
+                    extend_persistent(&env, &entry_key);
+                    extend_persistent(&env, &DataKey::SeenPr(entry.pr_hash));
+                }
             }
         }
 
         extend_instance(&env);
     }
 
+    /// Full attestation history for `wallet`, oldest first. Reads every
+    /// entry via [`Self::attestation_count`]'s backing counter; cost
+    /// grows with history size. A bounded, paginated replacement lands
+    /// in a follow-on change — see
+    /// `docs/adr/0004-paginated-attestation-storage.md`.
     pub fn get_attestations(env: Env, wallet: Address) -> Vec<Attestation> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Attestations(wallet))
-            .unwrap_or(Vec::new(&env))
+        let count = attestation_count(&env, &wallet);
+        let mut out = Vec::new(&env);
+        for seq in 0..count {
+            if let Some(entry) = env
+                .storage()
+                .persistent()
+                .get::<_, Attestation>(&DataKey::AttestationEntry(wallet.clone(), seq))
+            {
+                out.push_back(entry);
+            }
+        }
+        out
     }
 
     /// Sum of complexity points across all attestations for a wallet.
@@ -518,21 +561,28 @@ impl ProofOwlRegistry {
     /// [`UNVERIFIED_COMPLEXITY_SCORE`] rather than zero. The sum
     /// saturates at `u32::MAX`; with the accepted tier values that ceiling
     /// is unreachable in practice, and the result is fully deterministic.
+    ///
+    /// Currently re-folds the full history on every call; a running,
+    /// O(1) counter lands in a follow-on change — see
+    /// `docs/adr/0004-paginated-attestation-storage.md`.
     pub fn get_reputation_score(env: Env, wallet: Address) -> u32 {
-        let list: Vec<Attestation> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Attestations(wallet))
-            .unwrap_or(Vec::new(&env));
-
-        list.iter().fold(0u32, |acc, a| {
-            let points = if a.complexity == 0 {
-                UNVERIFIED_COMPLEXITY_SCORE
-            } else {
-                a.complexity
-            };
-            acc.saturating_add(points)
-        })
+        let count = attestation_count(&env, &wallet);
+        let mut score = 0u32;
+        for seq in 0..count {
+            if let Some(entry) = env
+                .storage()
+                .persistent()
+                .get::<_, Attestation>(&DataKey::AttestationEntry(wallet.clone(), seq))
+            {
+                let points = if entry.complexity == 0 {
+                    UNVERIFIED_COMPLEXITY_SCORE
+                } else {
+                    entry.complexity
+                };
+                score = score.saturating_add(points);
+            }
+        }
+        score
     }
 
     pub fn get_wallet_for_github(env: Env, github_id_hash: BytesN<32>) -> Option<Address> {
