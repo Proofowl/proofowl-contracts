@@ -64,6 +64,26 @@ check: fmt-check lint build test ## Complete local quality gate (matches CI)
 	@echo
 	@echo "OK — fmt, clippy, wasm build, and tests all passed."
 
+# --- Phase 4: adversarial and security testing --------------------------
+# These test files already run under `make test` / `cargo test --all`
+# (they are ordinary tests/*.rs, not a separate crate); `security-test`
+# names them explicitly so CI and a reviewer can run and see exactly the
+# adversarial/security subset in isolation, without weakening or
+# duplicating the full `make check` gate.
+
+.PHONY: security-test
+security-test: build ## Adversarial/state-machine/security test suite (named subset of `make test`)
+	$(CARGO) test --test security_matrix --test state_machine --test ttl_replay --test boundary_and_events --test sdk_vectors
+
+.PHONY: resource-profile
+resource-profile: build ## Measured resource/scalability profile (slow, diagnostic; NOT part of `make check`)
+	$(CARGO) test --release --test resource_profile -- --ignored --nocapture
+
+.PHONY: audit-ready
+audit-ready: check security-test supply-chain integration-check ## Full pre-audit gate: local quality + security suite + supply-chain + SDK
+	@echo
+	@echo "OK — audit-ready: fmt, clippy, wasm build, tests, security suite, supply-chain, and SDK gate all passed."
+
 .PHONY: clean
 clean: ## Remove build artifacts and regenerated test snapshots
 	$(CARGO) clean

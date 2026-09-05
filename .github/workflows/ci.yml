@@ -6,8 +6,10 @@ on:
   pull_request:
   schedule:
     # Weekly, so a newly published advisory is caught even without a
-    # commit. Monday 04:17 UTC.
+    # commit. Monday 04:17 UTC. Also drives the resource-profile job
+    # below, which is too slow/noisy to run on every push or PR.
     - cron: "17 4 * * 1"
+  workflow_dispatch: {}
 
 # GitHub Actions below are pinned to major version tags. Moving to full
 # commit-SHA pins is a tracked hardening task (see docs/MAINTAINERS.md /
@@ -45,6 +47,41 @@ jobs:
 
       - name: Test
         run: cargo test --all
+
+      # Named explicitly (a subset of the `cargo test --all` run just
+      # above, so this is not weakening or replacing it) so the
+      # adversarial/security suite's pass/fail shows as its own step in
+      # the CI log for anyone reviewing a run, per the Phase 4 mandate
+      # to make this coverage visible in CI, not just present in the
+      # tree. Mirrors `make security-test`.
+      - name: Adversarial and security test suite
+        run: cargo test --test security_matrix --test state_machine --test ttl_replay --test boundary_and_events --test sdk_vectors
+
+  # ---- Resource / scalability profile ---------------------------------
+  # Diagnostic, not a correctness gate: measures cost growth and the
+  # hard per-wallet history ceiling (docs/security/resource-profile-v1.md).
+  # Deploys the real WASM and runs `#[ignore]`d tests, which takes
+  # meaningfully longer than the rest of the suite and produces evidence
+  # for a document rather than a pass/fail security requirement, so it
+  # is kept off the default push/PR path and run on the same weekly
+  # schedule as the supply-chain advisory check, plus on-demand via
+  # workflow_dispatch. Mirrors `make resource-profile`.
+  resource-profile:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.84
+        with:
+          targets: wasm32v1-none
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Resource profile
+        run: make resource-profile
 
   supply-chain:
     runs-on: ubuntu-latest
