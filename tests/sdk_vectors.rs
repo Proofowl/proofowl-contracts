@@ -138,8 +138,8 @@ fn a_host_computed_hash_round_trips_through_submit_attestation() {
         client.submit_attestation(&attestor, &gh_hash, &repo, &42u32, &1u64, &100u32, &pr_hash);
     assert_eq!(credited, wallet);
 
-    let stored = client.get_attestations(&wallet);
-    assert_eq!(stored.get(0).unwrap().pr_hash, pr_hash);
+    assert_eq!(client.get_attestation_count(&wallet), 1);
+    assert_eq!(client.get_attestation(&wallet, &0u32).pr_hash, pr_hash);
 
     // The same pr_hash, recomputed independently a second time from the
     // same canonical string, is byte-identical and therefore correctly

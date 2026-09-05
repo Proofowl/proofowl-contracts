@@ -81,10 +81,9 @@ fn repo_string_boundaries_are_accepted_and_returned_verbatim() {
         let pr = hash(&env, 11 + i as u8 * 2);
         client.submit_attestation(&attestor, &gh_hash, &repo, &1u32, &1u64, &100u32, &pr);
 
-        let list = client.get_attestations(&wallet);
-        assert_eq!(list.len(), 1, "case {label:?}");
+        assert_eq!(client.get_attestation_count(&wallet), 1, "case {label:?}");
         assert_eq!(
-            list.get(0).unwrap().repo,
+            client.get_attestation(&wallet, &0u32).repo,
             repo,
             "case {label:?}: stored repo must match exactly"
         );
@@ -109,10 +108,9 @@ fn pr_number_and_issue_id_extremes_are_stored_exactly() {
         client.submit_attestation(&attestor, &gh, &repo, pr_number, issue_id, &100u32, &pr);
     }
 
-    let list = client.get_attestations(&wallet);
-    assert_eq!(list.len(), 4);
+    assert_eq!(client.get_attestation_count(&wallet), 4);
     for (i, (pr_number, issue_id)) in cases.iter().enumerate() {
-        let a = list.get(i as u32).unwrap();
+        let a = client.get_attestation(&wallet, &(i as u32));
         assert_eq!(a.pr_number, *pr_number, "case {i}");
         assert_eq!(a.issue_id, *issue_id, "case {i}");
     }
@@ -169,7 +167,7 @@ fn complexity_boundary_sweep_matches_the_exact_accept_reject_pattern() {
             assert_eq!(result, Err(Ok(Error::InvalidComplexity)));
         }
     }
-    assert_eq!(client.get_attestations(&wallet).len(), accepted);
+    assert_eq!(client.get_attestation_count(&wallet), accepted);
 }
 
 // ---------------------------------------------------------------------------
@@ -202,8 +200,11 @@ fn attestation_timestamp_reflects_ledger_time_at_extremes() {
             &hash(&env, 30),
         );
 
-        let list = client.get_attestations(&wallet);
-        assert_eq!(list.get(0).unwrap().timestamp, ts, "ledger timestamp {ts}");
+        assert_eq!(
+            client.get_attestation(&wallet, &0u32).timestamp,
+            ts,
+            "ledger timestamp {ts}"
+        );
     }
 }
 
@@ -288,9 +289,61 @@ fn submit_attestation_emits_exactly_one_attestation_recorded_event() {
         complexity: 150,
         pr_hash: pr,
         timestamp: TS,
+        sequence: 0, // v0.2: zero-based, first attestation for this wallet
     }
     .to_xdr(&env, &client.address);
     assert_eq!(events.events()[0], expected);
+}
+
+#[test]
+fn attestation_recorded_sequence_field_matches_the_wallets_growing_history() {
+    let (env, client, _admin, attestor) = setup();
+    let wallet = Address::generate(&env);
+    let gh = hash(&env, 61);
+    client.link_github(&wallet, &attestor, &gh);
+    let repo = String::from_str(&env, "stellar/soroban-examples");
+
+    // A second attestation for the same wallet must carry sequence 1,
+    // not 0 -- the event's new v0.2 field tracks the same zero-based
+    // index `get_attestation` addresses it by.
+    client.submit_attestation(
+        &attestor,
+        &gh,
+        &repo,
+        &1u32,
+        &1u64,
+        &100u32,
+        &hash(&env, 62),
+    );
+    client.submit_attestation(
+        &attestor,
+        &gh,
+        &repo,
+        &2u32,
+        &2u64,
+        &100u32,
+        &hash(&env, 63),
+    );
+
+    let events = env.events().all().filter_by_contract(&client.address);
+    assert_eq!(
+        events.events().len(),
+        1,
+        "only the last call's event is visible here"
+    );
+    let expected = AttestationRecorded {
+        wallet: wallet.clone(),
+        repo,
+        pr_number: 2,
+        issue_id: 2,
+        complexity: 100,
+        pr_hash: hash(&env, 63),
+        timestamp: TS,
+        sequence: 1,
+    }
+    .to_xdr(&env, &client.address);
+    assert_eq!(events.events()[0], expected);
+    assert_eq!(client.get_attestation_count(&wallet), 2);
 }
 
 #[test]
