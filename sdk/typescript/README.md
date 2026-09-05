@@ -41,10 +41,14 @@ src/
 
 ## Requirements
 
-- Node **>= 22.6** (uses the built-in test runner; CI uses Node 24).
-- Package manager: **npm** (a `package-lock.json` is committed).
+- Node **>= 22.6** (uses the built-in test runner). CI uses Node 24;
+  last verified locally with Node **24.20.0** / npm **11.19.0** (the
+  `packageManager` pin in `package.json`).
+- Package manager: **npm** (a `package-lock.json` is committed; `npm ci`
+  installs it verbatim).
 - For `npm run generate` only: the [Stellar CLI](https://developers.stellar.org/docs/tools/developer-tools/cli/stellar-cli)
-  and a Rust toolchain to build the WASM.
+  and a Rust toolchain (**1.91+**, see the repo root `CONTRIBUTING.md`)
+  to build the WASM.
 
 ## Install & build
 

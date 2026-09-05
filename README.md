@@ -140,11 +140,14 @@ exercised against a live network** — see
 
 ### Prerequisites
 
-- Rust **1.84+** (stable). `soroban-sdk 27` no longer builds against
-  `wasm32-unknown-unknown` on Rust ≥ 1.82; the Soroban wasm target is now
-  **`wasm32v1-none`**:
-  `rustup target add wasm32v1-none`
+- Rust **1.91+** (stable). CI pins the exact stable toolchain
+  **`1.91.0`** — the verified minimum, driven by `soroban-sdk 27.0.6`'s
+  declared `rust-version` (enforced by Cargo at build time). A newer
+  stable also works locally; the pin is a floor. The Soroban wasm
+  target is **`wasm32v1-none`**: `rustup target add wasm32v1-none`.
 - [Stellar CLI](https://developers.stellar.org/docs/tools/developer-tools/cli/stellar-cli)
+- **Node ≥ 22.6** + npm — only for `sdk/typescript/` work. CI uses
+  Node 24 (last verified: Node 24.20.0 / npm 11.19.0).
 
 ### Build and test
 
@@ -154,10 +157,16 @@ runs):
 ```
 make check
 # = cargo fmt --all -- --check
-#   cargo clippy --all-targets -- -D warnings
-#   cargo build --target wasm32v1-none --release
-#   cargo test --all
+#   cargo clippy --locked --all-targets -- -D warnings
+#   cargo build --locked --target wasm32v1-none --release
+#   cargo test --locked --all
+#   scripts/check_bounded_storage.sh
 ```
+
+Every dependency-resolving command passes `--locked`, so it builds the
+exact committed `Cargo.lock` and fails loudly rather than silently
+re-resolving. SDK checks (`sdk/typescript/`) are a separate gate:
+`make integration-check` (needs Node).
 
 `make help` lists every target. Supply-chain checks
 (`make deny` / `make audit`) need network access and are a separate CI

@@ -22,14 +22,19 @@ storage redesign is a **local candidate only** — see
 
 ## Gate 1 — Local validation
 
+Run on the pinned toolchain (Rust **1.91.0**, the verified minimum —
+see `docs/MAINTAINERS.md` "CI toolchain"). Every dependency-resolving
+command uses `--locked`.
+
 | # | Criterion | Status |
 |---|---|---|
 | 1.1 | `cargo fmt --all -- --check` clean | MET |
-| 1.2 | `cargo clippy --all-targets -- -D warnings` clean | MET |
-| 1.3 | `cargo build --target wasm32v1-none --release` succeeds | MET |
-| 1.4 | `cargo test --all` green (unit + integration + doc) | MET |
-| 1.5 | `make check` runs all of the above as one gate | MET |
-| 1.6 | `Cargo.lock` committed; build reproducible from it | MET |
+| 1.2 | `cargo clippy --locked --all-targets -- -D warnings` clean | MET (on 1.91.0) |
+| 1.3 | `cargo build --locked --target wasm32v1-none --release` succeeds | MET (on 1.91.0) |
+| 1.4 | `cargo test --locked --all` green (unit + integration + doc) | MET (on 1.91.0) |
+| 1.5 | `make check` runs all of the above plus `check_bounded_storage.sh` as one gate | MET |
+| 1.6 | `Cargo.lock` committed; `--locked` build reproducible from it | MET |
+| 1.7 | `Cargo.toml` `rust-version`, CI toolchain pin, Makefile `RUST_TOOLCHAIN_MIN`, and the supply-chain cache key all name the same exact toolchain | MET (`1.91.0`) |
 
 **Gate 1: GO.**
 
@@ -41,13 +46,14 @@ storage redesign is a **local candidate only** — see
 |---|---|---|
 | 2.1 | CI runs fmt, clippy, release-WASM build, tests on push and PR | MET |
 | 2.2 | WASM built before tests (integration test needs the artifact) | MET |
-| 2.3 | Supply-chain job: `cargo deny` (bans/licenses/sources) as a hard gate | MET |
+| 2.3 | Supply-chain job: `cargo deny --locked check` (bans/licenses/sources) as a hard gate | MET |
 | 2.4 | Supply-chain job: `cargo deny advisories` + `cargo audit`, also on a weekly schedule | MET |
-| 2.5 | GitHub Actions pinned to explicit versions | PARTIAL — pinned to major version tags; full commit-SHA pinning is an open hardening task (needs a maintainer with network access to verify SHAs) |
-| 2.6 | No action references a floating branch | MET |
-| 2.7 | Supply-chain checks validated in this environment | PARTIAL — `cargo deny` / `cargo audit` were run locally against `deny.toml`; see the report in the PR. CI installs the same pinned versions. |
+| 2.5 | GitHub Actions pinned to explicit versions | PARTIAL — `dtolnay/rust-toolchain@1.91.0` is a version-exact branch (not the moving `@1.91`); other actions on major tags. Full commit-SHA pinning is an open hardening task (needs a maintainer with network access to verify SHAs) |
+| 2.6 | No action references a floating branch | MET — the Rust action uses the exact `@1.91.0`, not `@1.91` / `@stable` |
+| 2.7 | CI toolchain can actually run every gate | **MET (pending a green run)** — CI's `test` / `supply-chain` / `sdk-bindings-drift` jobs were red because the `@1.84` pin could no longer parse edition-2024 transitive manifests or build `cargo-deny 0.20.2` (rustc ≥ 1.88). Fixed by pinning the verified minimum `1.91.0`; every step was reproduced locally on that exact toolchain (fmt, clippy, build, test, fresh `cargo install --locked` of both security tools, `cargo deny --locked check`, `cargo audit`). Pinning the toolchain also required regenerating `sdk/typescript/src/generated/index.ts` on 1.91.0 — the WASM's `contractspecv0` entry order is rustc-version-dependent and the committed file had been built on a newer stable (one adjacent-pair swap, byte-identical entry contents, no API change); verified deterministic across three 1.91.0 builds, and `make sdk-drift-check` is green on the pin. CI has not yet re-run — this row flips to plain MET only after a green push. |
+| 2.8 | `sdk` job (Node) green | **MET (pending a green run)** — was red on two unformatted files (`README.md`, `errors.test.ts`); fixed with Prettier and the full SDK suite (format / lint / typecheck / 21 unit tests / build) re-run locally on Node 24.20.0. |
 
-**Gate 2: GO with follow-ups** (2.5, and keep 2.7 green in CI).
+**Gate 2: GO with follow-ups** (2.5; confirm 2.7 / 2.8 flip to MET on the next CI run).
 
 ---
 

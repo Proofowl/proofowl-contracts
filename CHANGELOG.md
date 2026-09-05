@@ -15,6 +15,44 @@ Testnet section below); no mainnet deployment exists.
 
 ## [Unreleased]
 
+### CI repair — Rust toolchain, security tooling, SDK formatting
+- **CI Rust toolchain re-pinned from `@1.84` to the exact stable
+  `@1.91.0`** across all four jobs (`test`, `resource-profile`,
+  `supply-chain`, `sdk-bindings-drift`). `1.91.0` is the *verified
+  minimum*, not the latest: `soroban-sdk 27.0.6` and its sibling crates
+  declare `rust-version = 1.91.0` (Cargo-enforced at build time), and it
+  also clears the floor for parsing the edition-2024 transitive
+  manifests in `Cargo.lock` and for building `cargo-deny 0.20.2` /
+  `cargo-audit 0.22.2` (both MSRV 1.88). Verified end-to-end on that
+  exact toolchain locally. No security tool was downgraded and no check
+  was weakened — see `docs/MAINTAINERS.md` "CI toolchain" for the
+  bump procedure and an honest note on the prior CI-red period.
+- `Cargo.toml` `rust-version` `1.84` → `1.91.0`; `Makefile` gains
+  `RUST_TOOLCHAIN_MIN`; the `supply-chain` cache key now names the
+  toolchain so a bump forces a clean tool rebuild.
+- **`--locked` added to every dependency-resolving Cargo command** in CI
+  and the Makefile (`clippy`, `build`, `test`, `cargo deny check`;
+  `cargo audit` reads `Cargo.lock` directly and takes no such flag), so
+  CI builds the exact committed graph and fails loudly on drift instead
+  of silently re-resolving.
+- **TypeScript SDK: Prettier formatting fixed** on `sdk/typescript/README.md`
+  and `sdk/typescript/src/errors.test.ts` (cosmetic line-wrapping only —
+  no logic change). The full SDK suite (format / lint / type-check / 21
+  unit tests / build) was re-run on Node 24.20.0 / npm 11.19.0.
+- **`sdk/typescript/src/generated/index.ts` regenerated on the pinned
+  1.91.0 toolchain.** The order of entries in the contract WASM's
+  `contractspecv0` custom section is rustc-version-dependent; the
+  committed file had been generated on a newer stable (1.98.0). The only
+  change is that the `AttestationRecorded` event-spec entry and the
+  `get_admin` function-spec entry swap positions in the `ContractSpec([…])`
+  array — byte-identical entry contents, no API/type/behavior change, and
+  `ContractClient` resolves entries by name, not position. Regenerating
+  now keeps the `sdk-bindings-drift` CI job (which rebuilds the WASM on
+  the pinned toolchain) green. Verified deterministic across three
+  independent 1.91.0 builds.
+- No contract behavior, v0.2 API, storage design, or security guarantee
+  changed in this repair. Nothing pushed, deployed, tagged, or released.
+
 ### v0.2 paginated-storage redesign — local candidate, not deployed
 - **Breaking storage/API redesign**
   (`docs/adr/0004-paginated-attestation-storage.md`) fixing Phase 4's

@@ -55,10 +55,74 @@ See [`../SECURITY.md`](../SECURITY.md) for the report intake. On receipt:
 There is currently **no bug bounty and no committed response time** —
 do not imply otherwise in any reply or document.
 
+## CI toolchain
+
+- **Rust is pinned to an EXACT stable release: `1.91.0`.** Four places
+  must stay in lock-step — the four `dtolnay/rust-toolchain@1.91.0` uses
+  in `.github/workflows/ci.yml`, the `rust-1.91.0` segment of the
+  `supply-chain` job's cache key, `Cargo.toml`'s `rust-version`, and
+  `RUST_TOOLCHAIN_MIN` in the `Makefile`.
+- **Why 1.91.0 specifically:** it is the *verified minimum*, not the
+  latest. The binding constraint is `soroban-sdk 27.0.6` (and its
+  `-macros` / `-spec` / `-ledger-snapshot` siblings), which declare
+  `rust-version = 1.91.0`; Cargo refuses to build a crate whose
+  `rust-version` exceeds the active toolchain. 1.91.0 is also above the
+  floor for parsing the edition-2024 transitive manifests in
+  `Cargo.lock` (needs Cargo ≥ 1.85) and above `cargo-deny 0.20.2`'s
+  and `cargo-audit 0.22.2`'s own MSRV of 1.88.
+- **How to bump it** (e.g. when upgrading `soroban-sdk`): pick the new
+  verified minimum by checking the max `rust_version` across the locked
+  graph —
+  `cargo metadata --locked --format-version 1 | jq -r '.packages[] | select(.rust_version) | .rust_version' | sort -V | tail -1` —
+  install *that exact* toolchain locally, run `make check`, `make
+  security-test`, and a fresh `cargo install --locked` of both pinned
+  security tools plus `make deny` / `make audit`, then update all four
+  places above together. Do **not** move to a floating `1.x` /
+  `stable` pin; the exact pin is deliberate.
+- CI Cargo commands pass `--locked` everywhere they resolve
+  dependencies (`cargo audit` excepted — it reads `Cargo.lock`
+  directly), so a stale lockfile fails CI instead of being silently
+  re-resolved.
+- **The checked-in TypeScript bindings are toolchain-coupled.**
+  `stellar contract bindings typescript` emits the `ContractSpec([…])`
+  array in the order the entries appear in the WASM's `contractspecv0`
+  custom section, and that order is rustc-version-dependent (entry
+  *contents* are stable; their *sequence* is not). So
+  `sdk/typescript/src/generated/index.ts` must be regenerated on the
+  pinned toolchain — `make sdk-generate` after a
+  `cargo build --locked --target wasm32v1-none --release` on 1.91.0 —
+  and committed, or the `sdk-bindings-drift` job (which rebuilds the
+  WASM on the pin) fails. Bumping the toolchain pin therefore also
+  means regenerating and committing this file in the same change.
+
+### Note — the 2026-09 CI-red period (resolved)
+
+Between roughly the Phase 1 commits and 2026-09-05, the `test`,
+`supply-chain`, and `sdk-bindings-drift` jobs were red on `main`. Root
+cause, from the run logs (not speculation): CI pinned
+`dtolnay/rust-toolchain@1.84`, and over time (a) transitive dependencies
+in `Cargo.lock` gained edition-2024 manifests that Cargo 1.84 cannot
+parse, and (b) the pinned `cargo-deny 0.20.2` raised its own MSRV to
+1.88. Local `make check` kept passing because dev machines run a much
+newer stable. The fix (this commit's sibling `ci:` commit) was to pin
+the exact verified minimum toolchain, `1.91.0`, and add `--locked`; no
+check was weakened and no security tool was downgraded. `sdk` was a
+separate, later regression — two SDK files not run through Prettier —
+fixed by `style: format typescript sdk sources`. Pinning the toolchain
+also surfaced a follow-on `sdk-bindings-drift` mismatch: the committed
+`src/generated/index.ts` had been generated on a newer stable, whose
+`contractspecv0` section orders two entries differently from 1.91.0's;
+regenerating on the pinned toolchain (one adjacent-pair swap,
+byte-identical contents) cleared it.
+
 ## Keeping supply-chain checks healthy
 
 - The `supply-chain` job also runs on a weekly schedule so a newly
   published advisory is surfaced even without a commit.
+- The Rust toolchain pin and the `cargo-deny` / `cargo-audit` version
+  pins are coupled: both tools must build on the pinned toolchain.
+  Re-check this whenever either the toolchain or a tool version moves
+  (see "CI toolchain" above).
 - When `cargo audit` / `cargo deny advisories` flags a transitive dep:
   prefer bumping `Cargo.lock`; if no fixed version exists, add a
   time-boxed `deny.toml` exception with a tracking note.
