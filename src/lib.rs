@@ -76,12 +76,16 @@
 //! paginated ([`ProofOwlRegistry::get_attestation_count`],
 //! [`ProofOwlRegistry::get_attestation`],
 //! [`ProofOwlRegistry::get_attestations_page`]) in place of v0.1's
-//! unbounded `get_attestations`, and [`ProofOwlRegistry::get_reputation_score`]
+//! unbounded `get_attestations`, [`ProofOwlRegistry::get_reputation_score`]
 //! is O(1) against a running [`DataKey::ReputationScore`] counter that
-//! `submit_attestation` updates atomically, never re-derived from a
-//! scan. TTL maintenance still scales with history size at this stage
-//! of the redesign; bounded, paginated TTL maintenance lands in a
-//! follow-on change (see `docs/adr/0004-paginated-attestation-storage.md`).
+//! `submit_attestation` updates atomically, and TTL maintenance is split
+//! into an O(1) call for a wallet's small fixed-size records
+//! ([`ProofOwlRegistry::bump_wallet_core_ttl`]) and a bounded, paginated
+//! sweep for its attestation entries
+//! ([`ProofOwlRegistry::bump_attestations_ttl_page`]) in place of
+//! v0.1's unbounded `bump_wallet_ttl`. See
+//! `docs/adr/0004-paginated-attestation-storage.md` and
+//! `docs/migrations/v0.1-to-v0.2.md`.
 
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, Address, BytesN, Env,
@@ -194,7 +198,7 @@ const UNVERIFIED_COMPLEXITY_SCORE: u32 = 50;
 const ALLOWED_COMPLEXITY: [u32; 4] = [0, 100, 150, 200];
 
 /// The largest `limit` accepted by any paginated call
-/// (`get_attestations_page`, `bump_wallet_attestations_ttl_page`).
+/// (`get_attestations_page`, `bump_attestations_ttl_page`).
 ///
 /// Chosen as a small, fixed bound so a page's read/write cost and
 /// response size stay flat regardless of how large a wallet's total
@@ -553,21 +557,19 @@ impl ProofOwlRegistry {
         Ok(wallet)
     }
 
-    /// Permissionless keep-alive. Extends the TTL of every long-lived
-    /// record tied to a wallet: the wallet link, the GitHub link it
-    /// points at, every attestation entry, the attestation counter, and
-    /// every `SeenPr` de-duplication marker referenced by that history —
-    /// so a merged PR can never become re-submittable just because its
-    /// marker was allowed to expire.
+    /// Permissionless keep-alive for the O(1) records tied to a wallet:
+    /// the wallet link, the GitHub link it points at, the attestation
+    /// counter, and the reputation score. Does **not** touch individual
+    /// attestation entries or their `SeenPr` markers — those are swept
+    /// separately, in bounded pages, by
+    /// [`Self::bump_attestations_ttl_page`].
     ///
     /// Anyone can call it (a frontend "keep my passport alive" button, a
     /// cron job). It only pushes out archival and never changes data.
-    /// No-op for an unlinked wallet with no history.
-    ///
-    /// Cost scales with the number of attestations for the wallet. A
-    /// bounded, paginated replacement lands in a follow-on change — see
+    /// No-op for a wallet with no link and no history. Cost is constant
+    /// regardless of history size — see
     /// `docs/adr/0004-paginated-attestation-storage.md`.
-    pub fn bump_wallet_ttl(env: Env, wallet: Address) {
+    pub fn bump_wallet_core_ttl(env: Env, wallet: Address) {
         let wallet_key = DataKey::WalletLink(wallet.clone());
         if let Some(github_id_hash) = env.storage().persistent().get::<_, BytesN<32>>(&wallet_key) {
             extend_persistent(&env, &wallet_key);
@@ -575,19 +577,60 @@ impl ProofOwlRegistry {
         }
 
         let count_key = DataKey::AttestationCount(wallet.clone());
-        let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
-        if count > 0 {
+        if env.storage().persistent().has(&count_key) {
             extend_persistent(&env, &count_key);
-            for seq in 0..count {
-                let entry_key = DataKey::AttestationEntry(wallet.clone(), seq);
-                if let Some(entry) = env.storage().persistent().get::<_, Attestation>(&entry_key) {
-                    extend_persistent(&env, &entry_key);
-                    extend_persistent(&env, &DataKey::SeenPr(entry.pr_hash));
-                }
-            }
+        }
+
+        let score_key = DataKey::ReputationScore(wallet);
+        if env.storage().persistent().has(&score_key) {
+            extend_persistent(&env, &score_key);
         }
 
         extend_instance(&env);
+    }
+
+    /// Permissionless, bounded keep-alive for one page of a wallet's
+    /// attestation history: extends the TTL of each
+    /// `AttestationEntry(wallet, seq)` in `[start, start+limit)` and the
+    /// `SeenPr` marker its `pr_hash` points at, so a merged PR can never
+    /// become re-submittable just because its marker was allowed to
+    /// expire — regardless of which page it happens to be on.
+    ///
+    /// Same `limit`/`start` rules as
+    /// [`Self::get_attestations_page`] ([`Error::InvalidPageLimit`],
+    /// [`Error::PageLimitExceeded`], [`Error::PageStartOutOfRange`]).
+    /// Returns the number of entries actually refreshed: a caller
+    /// sweeping a wallet's full history calls this repeatedly with an
+    /// advancing `start`, and a return value less than `limit`
+    /// (including `0`) signals the sweep has reached the end. Changes no
+    /// data — see `docs/security/resource-profile-v2.md` for the backend
+    /// scheduling responsibility this implies, and
+    /// `docs/adr/0004-paginated-attestation-storage.md` for why this is
+    /// a separate call from [`Self::bump_wallet_core_ttl`].
+    pub fn bump_attestations_ttl_page(
+        env: Env,
+        wallet: Address,
+        start: u32,
+        limit: u32,
+    ) -> Result<u32, Error> {
+        Self::check_page_limit(limit)?;
+        let count = attestation_count(&env, &wallet);
+        if start > count {
+            return Err(Error::PageStartOutOfRange);
+        }
+
+        let end = start.saturating_add(limit).min(count);
+        let mut refreshed = 0u32;
+        for seq in start..end {
+            let entry_key = DataKey::AttestationEntry(wallet.clone(), seq);
+            if let Some(entry) = env.storage().persistent().get::<_, Attestation>(&entry_key) {
+                extend_persistent(&env, &entry_key);
+                extend_persistent(&env, &DataKey::SeenPr(entry.pr_hash));
+                refreshed += 1;
+            }
+        }
+        extend_instance(&env);
+        Ok(refreshed)
     }
 
     /// How many attestations `wallet` has. `0` for an unknown or
