@@ -2,7 +2,13 @@
 name = "proofowl-contracts"
 version = "0.2.0"
 edition = "2021"
-rust-version = "1.84"
+# Verified minimum: the `soroban-sdk 27.0.6` family declares
+# `rust-version = 1.91.0`, which Cargo enforces at build time, and it is
+# also the floor for parsing the edition-2024 transitive manifests in
+# `Cargo.lock` and for building the pinned `cargo-deny` / `cargo-audit`.
+# CI pins this exact toolchain (`.github/workflows/ci.yml`,
+# `docs/MAINTAINERS.md`).
+rust-version = "1.91.0"
 license = "MIT"
 description = "ProofOwl on-chain reputation registry — Soroban contract"
 repository = "https://github.com/proofowl/proofowl-contracts"

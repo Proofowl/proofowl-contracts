@@ -13,9 +13,16 @@ WASM_TARGET ?= wasm32v1-none
 WASM_CRATE  ?= proofowl_contracts
 WASM_OUT    := target/$(WASM_TARGET)/release/$(WASM_CRATE).wasm
 
+# Minimum verified Rust toolchain. CI pins this exact stable release
+# (.github/workflows/ci.yml) and Cargo.toml's `rust-version` matches it.
+# Driven by soroban-sdk 27.0.6's declared rust-version; see
+# docs/MAINTAINERS.md "CI toolchain".
+RUST_TOOLCHAIN_MIN ?= 1.91.0
+
 # Pinned tool versions for the optional supply-chain targets. CI pins the
 # same versions; keep them in sync (see .github/workflows/ci.yml and
-# deny.toml).
+# deny.toml). These build on RUST_TOOLCHAIN_MIN (cargo-deny 0.20.2 needs
+# rustc >= 1.88.0, cargo-audit 0.22.2 needs >= 1.88).
 CARGO_DENY_VERSION  ?= 0.20.2
 CARGO_AUDIT_VERSION ?= 0.22.2
 
@@ -36,6 +43,7 @@ help: ## Show this help
 		| awk 'BEGIN {FS = ":.*?## "} {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 	@echo
 	@echo "Quality gate:   make check"
+	@echo "Rust toolchain: $(RUST_TOOLCHAIN_MIN) (exact pin in CI; minimum here)  Node: >= 22.6 (CI uses 24)"
 	@echo "WASM target:    $(WASM_TARGET)  (rustup target add $(WASM_TARGET))"
 
 .PHONY: fmt
@@ -46,18 +54,20 @@ fmt: ## Format the workspace in place (rustfmt)
 fmt-check: ## Check formatting without writing (used by `check` and CI)
 	$(CARGO) fmt --all -- --check
 
+# `--locked` on every dependency-resolving command so local runs use the
+# exact committed Cargo.lock, matching CI, and fail loudly on drift.
 .PHONY: lint
 lint: ## Clippy with warnings denied, all targets
-	$(CARGO) clippy --all-targets -- -D warnings
+	$(CARGO) clippy --locked --all-targets -- -D warnings
 
 .PHONY: build
 build: ## Build the release WASM for the supported Soroban target
-	$(CARGO) build --target $(WASM_TARGET) --release
+	$(CARGO) build --locked --target $(WASM_TARGET) --release
 	@echo "built: $(WASM_OUT)"
 
 .PHONY: test
 test: build ## Run the full test suite (build first: an integration test needs the WASM)
-	$(CARGO) test --all
+	$(CARGO) test --locked --all
 
 .PHONY: check
 check: fmt-check lint build test check-bounded-storage ## Complete local quality gate (matches CI)
@@ -84,11 +94,11 @@ check-bounded-storage: ## Static guard: v0.1's unbounded storage pattern cannot 
 
 .PHONY: security-test
 security-test: build ## Adversarial/state-machine/security test suite (named subset of `make test`)
-	$(CARGO) test --test security_matrix --test state_machine --test ttl_replay --test boundary_and_events --test sdk_vectors
+	$(CARGO) test --locked --test security_matrix --test state_machine --test ttl_replay --test boundary_and_events --test sdk_vectors
 
 .PHONY: resource-profile
 resource-profile: build ## Measured resource/scalability profile (slow, diagnostic; NOT part of `make check`)
-	$(CARGO) test --release --test resource_profile -- --ignored --nocapture
+	$(CARGO) test --locked --release --test resource_profile -- --ignored --nocapture
 
 .PHONY: audit-ready
 audit-ready: check security-test supply-chain integration-check ## Full pre-audit gate: local quality + security suite + supply-chain + SDK
@@ -112,7 +122,7 @@ deny: ## cargo-deny: bans / licenses / sources (deterministic) + advisories
 		echo "cargo-deny not installed. Run:"; \
 		echo "  cargo install --locked --version $(CARGO_DENY_VERSION) cargo-deny"; \
 		exit 1; }
-	$(CARGO) deny check
+	$(CARGO) deny --locked check
 
 .PHONY: audit
 audit: ## cargo-audit: known-vulnerability scan against Cargo.lock

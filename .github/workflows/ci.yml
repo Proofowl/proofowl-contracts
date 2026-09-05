@@ -23,9 +23,16 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        # soroban-sdk 27 requires Rust >= 1.84 and the wasm32v1-none
-        # target; wasm32-unknown-unknown is unsupported on Rust >= 1.82.
-        uses: dtolnay/rust-toolchain@1.84
+        # Pinned to an EXACT stable release, not a moving `1.91` / `stable`
+        # target. This is the verified minimum: the `soroban-sdk 27.0.6`
+        # family declares `rust-version = 1.91.0` (see `Cargo.toml`'s
+        # `rust-version` and docs/MAINTAINERS.md "CI toolchain"), which
+        # Cargo enforces at build time, and it is also new enough to
+        # parse the edition-2024 transitive manifests in `Cargo.lock` and
+        # to build the pinned `cargo-deny` / `cargo-audit` (see the
+        # supply-chain job). The `wasm32v1-none` target is the only
+        # Soroban wasm target on modern Rust.
+        uses: dtolnay/rust-toolchain@1.91.0
         with:
           targets: wasm32v1-none
           components: rustfmt, clippy
@@ -36,17 +43,20 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
 
+      # `--locked` on every command that resolves dependencies: CI must
+      # build the exact graph in the committed `Cargo.lock` and fail
+      # loudly rather than silently re-resolve it.
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
 
       # Build the wasm BEFORE the tests: tests/constructor_auth.rs deploys
       # the compiled artifact through the real deployer/auth path and
       # skips itself if the wasm is absent.
       - name: Build wasm (release)
-        run: cargo build --target wasm32v1-none --release
+        run: cargo build --locked --target wasm32v1-none --release
 
       - name: Test
-        run: cargo test --all
+        run: cargo test --locked --all
 
       # Named explicitly (a subset of the `cargo test --all` run just
       # above, so this is not weakening or replacing it) so the
@@ -55,7 +65,7 @@ jobs:
       # to make this coverage visible in CI, not just present in the
       # tree. Mirrors `make security-test`.
       - name: Adversarial and security test suite
-        run: cargo test --test security_matrix --test state_machine --test ttl_replay --test boundary_and_events --test sdk_vectors
+        run: cargo test --locked --test security_matrix --test state_machine --test ttl_replay --test boundary_and_events --test sdk_vectors
 
       # v0.2 structural regression guard (docs/adr/0004-paginated-attestation-storage.md):
       # fails fast, statically, if a future change reintroduces v0.1's
@@ -80,7 +90,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.84
+        # Same exact pin as the `test` job — see its comment.
+        uses: dtolnay/rust-toolchain@1.91.0
         with:
           targets: wasm32v1-none
 
@@ -96,11 +107,16 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.84
+        # cargo-deny 0.20.2 needs rustc >= 1.88.0 and cargo-audit 0.22.2
+        # needs >= 1.88; both build cleanly on the 1.91.0 pin the `test`
+        # job also uses. See docs/MAINTAINERS.md "CI toolchain".
+        uses: dtolnay/rust-toolchain@1.91.0
 
-      # cargo-deny / cargo-audit are pinned by exact version and cached by
-      # that version key, so CI stays reproducible and fast. Bump the
-      # versions here, in the Makefile, and re-validate deny.toml together.
+      # cargo-deny / cargo-audit are pinned to exact versions and cached
+      # by a key that also names the Rust toolchain, so a toolchain bump
+      # forces a clean rebuild of the binaries rather than reusing ones
+      # linked against the old std. Bump these versions here, in the
+      # Makefile, and re-validate deny.toml together.
       - name: Cache supply-chain tools
         id: cache-tools
         uses: actions/cache@v4
@@ -108,8 +124,11 @@ jobs:
           path: |
             ~/.cargo/bin/cargo-deny
             ~/.cargo/bin/cargo-audit
-          key: supply-chain-tools-${{ runner.os }}-cargo-deny-0.20.2-cargo-audit-0.22.2
+          key: supply-chain-tools-${{ runner.os }}-rust-1.91.0-cargo-deny-0.20.2-cargo-audit-0.22.2
 
+      # Runs on a cache miss; a cache hit places the binaries directly on
+      # PATH and this is skipped. Either path leaves working
+      # cargo-deny/cargo-audit binaries for the two steps below.
       - name: Install cargo-deny and cargo-audit
         if: steps.cache-tools.outputs.cache-hit != 'true'
         run: |
@@ -118,11 +137,13 @@ jobs:
 
       # Deterministic given Cargo.lock: bans, licenses, sources. Plus the
       # advisories check (network — RustSec DB); a single documented
-      # exception lives in deny.toml.
+      # exception lives in deny.toml. `--locked` so it audits the exact
+      # committed graph.
       - name: cargo-deny
-        run: cargo deny check
+        run: cargo deny --locked check
 
-      # Secondary scan. Same documented exception as deny.toml.
+      # Secondary scan. Reads Cargo.lock directly (no re-resolution, so no
+      # --locked flag). Same documented exception as deny.toml.
       - name: cargo-audit
         run: cargo audit --ignore RUSTSEC-2024-0436
 
@@ -171,7 +192,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.84
+        # Same exact pin as the `test` job — see its comment.
+        uses: dtolnay/rust-toolchain@1.91.0
         with:
           targets: wasm32v1-none
 
@@ -198,7 +220,7 @@ jobs:
         run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Build contract WASM
-        run: cargo build --target wasm32v1-none --release
+        run: cargo build --locked --target wasm32v1-none --release
 
       - name: Regenerate bindings
         run: npm run generate
